@@ -12,12 +12,51 @@ struct WorldRect {
 	float h;
 };
 
-void worldRectToRenderRect(WorldRect &wRect, SDL_Rect &rRect, float pixPerHorizontalMeter, float pixPerVerticalMeter, int ScreenHeight) {
-	rRect.w = (int)(wRect.w * pixPerHorizontalMeter);
-	rRect.h = (int)(wRect.h * pixPerVerticalMeter);
-	rRect.x = (int)(wRect.x * pixPerHorizontalMeter);
-	rRect.y = ScreenHeight - ((int)(wRect.y * pixPerVerticalMeter) + rRect.h);
+bool xOverlap(WorldRect &a, WorldRect &b) {
+	return a.x + a.w > b.x && a.x < b.x + b.w;
 }
+
+bool isAbove(WorldRect &a, WorldRect &b) {
+	return a.y >= b.y + b.h;
+}
+
+bool isBelowBottom(WorldRect &a, WorldRect &b) {
+	return a.y < b.y;
+}
+
+bool isBelowTop(WorldRect &a, WorldRect &b) {
+	return a.y < b.y + b.h;
+}
+
+struct ScreenProperties {
+	int screenWidth;
+	int screenHeight;
+	float pixPerHorizontalMeter;
+	float pixPerVerticalMeter;
+};
+
+// creates an SDL_Rect from WorldRect, based on screen properties
+void worldRectToRenderRect(WorldRect &wRect, SDL_Rect &rRect, ScreenProperties &screenProps) {
+	rRect.w = (int)(wRect.w * screenProps.pixPerHorizontalMeter);
+	rRect.h = (int)(wRect.h * screenProps.pixPerVerticalMeter);
+	rRect.x = (int)(wRect.x * screenProps.pixPerHorizontalMeter);
+	rRect.y = screenProps.screenHeight - ((int)(wRect.y * screenProps.pixPerVerticalMeter) + rRect.h);
+}
+
+struct Platform {
+	WorldRect rect = {};
+	bool abovePlatform = false;
+	bool underPlatform = false;
+	bool wasAbovePlatform = false;
+	bool onPlatform = false;
+};
+
+enum PlayerState {
+	inAir,
+	onTransientGround,
+	onSolidGround,
+	onLadder
+};
 
 int main(int argc, char *argv[]) {
 
@@ -27,13 +66,19 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	int ScreenHeight = 720;
-	int ScreenWidth = 1280;
+	float WorldWidth = 10.0f;
+	float WorldHeight = 10.0f;
 
-	SDL_Window *window = SDL_CreateWindow("2D RPG", 
-										  SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 
-										  ScreenWidth, ScreenHeight, 
-										  SDL_WindowFlags::SDL_WINDOW_RESIZABLE);
+	ScreenProperties screenProps = {};
+	screenProps.screenHeight = 720;
+	screenProps.screenWidth = 1280;
+	screenProps.pixPerVerticalMeter = screenProps.screenHeight / WorldHeight; // pixels per meter
+	screenProps.pixPerHorizontalMeter = screenProps.screenWidth / WorldWidth; // pixels per meter
+
+	SDL_Window *window = SDL_CreateWindow("2D RPG",
+		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+		screenProps.screenWidth, screenProps.screenHeight,
+		SDL_WindowFlags::SDL_WINDOW_RESIZABLE);
 	if(window == NULL) {
 		LogError();
 		SDL_Quit();
@@ -52,8 +97,6 @@ int main(int argc, char *argv[]) {
 	Uint32 msThisFrame = msLastFrame;    // ms
 	float dt = 0.0f; // seconds
 
-	float pixPerVerticalMeter = ScreenHeight / 10.0f; // pixels per meter
-	float pixPerHorizontalMeter = ScreenWidth / 10.0f; // pixels per meter
 	float moveSpeed = 2.68224f; // meters per second
 	float gravity = -9.8f; // meters per second per second
 	float jumpSpeed = 9.0f; // meters per second
@@ -66,21 +109,35 @@ int main(int argc, char *argv[]) {
 	float xVel = 0.0f;
 	float yVel = 0.0f;
 
-	bool abovePlatform = false;
-	bool inPlatform = false;
+	PlayerState state = PlayerState::inAir;
 
-	WorldRect platform = {};
-	platform.x = 4.0f; // meters
-	platform.y = 2.0f; // meters
-	platform.w = 2.0f; // meters
-	platform.h = 1.0f; // meters
+	WorldRect ladder = {};
+	ladder.x = 2.0f;
+	ladder.y = 0.0f;
+	ladder.w = 0.5f;
+	ladder.h = 6.0f;
+	bool onThisLadder = false;
 
-	int xDir = 0; // move direction
-	int yDir = 0; // move direction
+	bool dropDown = false;
 
-	bool lastAbovePlatform = false;
-	bool onSolidGround = false;
-	
+	const int numPlatforms = 5;
+	Platform platform[numPlatforms];
+	for(int i = 0; i < 4; i++) {
+		platform[i].rect.x = 4.0f + i * 1.3f; // meters
+		platform[i].rect.y = 2.0f; // meters
+		platform[i].rect.w = 1.0f; // meters
+		platform[i].rect.h = 0.5f; // meters
+	}
+	platform[4].rect.x = ladder.x - 0.2f;
+	platform[4].rect.y = ladder.h - 0.5f;
+	platform[4].rect.w = ladder.w + 0.4f;
+	platform[4].rect.h = 0.5f;
+
+	bool newX = false;
+	int xInput = 0; // move direction
+	bool newY = false;
+	int yInput = 0; // move direction
+	bool spacePressed;
 
 	bool isRunning = true;
 	while(isRunning) {
@@ -88,9 +145,11 @@ int main(int argc, char *argv[]) {
 		// timing
 		msThisFrame = SDL_GetTicks();
 		dt = (msThisFrame - msLastFrame) / 1000.0f;
-		lastAbovePlatform = abovePlatform;
 
 		// input processing
+		newX = false;
+		newY = false;
+		spacePressed = false;
 		SDL_Event e;
 		while(SDL_PollEvent(&e)) {
 			switch(e.type) {
@@ -101,10 +160,10 @@ int main(int argc, char *argv[]) {
 			case SDL_EventType::SDL_WINDOWEVENT:
 				if(e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
 					SDL_Log("Window resized to (%d,%d)", e.window.data1, e.window.data2);
-					ScreenWidth = e.window.data1;
-					ScreenHeight = e.window.data2;
-					pixPerHorizontalMeter = ScreenWidth / 10.0f;
-					pixPerVerticalMeter = ScreenHeight / 10.0f;
+					screenProps.screenWidth = e.window.data1;
+					screenProps.screenHeight = e.window.data2;
+					screenProps.pixPerHorizontalMeter = screenProps.screenWidth / WorldWidth;
+					screenProps.pixPerVerticalMeter = screenProps.screenHeight / WorldHeight;
 				}
 				break;
 
@@ -118,22 +177,31 @@ int main(int argc, char *argv[]) {
 					isRunning = false;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_D:
-					xDir++;
+					if(xInput <= 0) {
+						newX = true;
+					}
+					xInput++;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_A:
-					xDir--;
+					if(xInput >= 0) {
+						newX = true;
+					}
+					xInput--;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_W:
-					yDir++;
+					if(yInput <= 0) {
+						newY = true;
+					}
+					yInput++;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_S:
-					onSolidGround = false;
-					yVel = -jumpSpeed/4;
-					yDir--;
+					if(yInput >= 0) {
+						newY = true;
+					}
+					yInput--;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_SPACE:
-					onSolidGround = false;
-					yVel += jumpSpeed;
+					spacePressed = true;
 					break;
 				}
 				break;
@@ -145,57 +213,143 @@ int main(int argc, char *argv[]) {
 
 				switch(e.key.keysym.scancode) {
 				case SDL_Scancode::SDL_SCANCODE_D:
-					xDir--;
+					xInput--;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_A:
-					xDir++;
+					xInput++;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_W:
-					yDir--;
+					yInput--;
 					break;
 				case SDL_Scancode::SDL_SCANCODE_S:
-					yDir++;
+					yInput++;
 					break;
 				}
 				break;
 			}
 		}
 
-		//update game logic
-		player.x += xDir * moveSpeed * dt;
-		if(yDir) {
-			//yVel = yDir * moveSpeed;
+		// process input
+		if(state != PlayerState::onLadder) {
+			if(yInput > 0) {
+				if(isBelowTop(player, ladder) && xOverlap(player, ladder)) {
+					// attach to ladder
+					state = PlayerState::onLadder;
+					player.x = ladder.x + (ladder.w - player.w) / 2;
+				}
+			}
+
+			if(yInput < 0) {
+				if(isBelowTop(player, ladder) && xOverlap(player, ladder)) {
+					// attach to ladder
+					state = PlayerState::onLadder;
+					player.x = ladder.x + (ladder.w - player.w) / 2;
+				}
+			}
 		}
 
-		// if player walked off platform
-		if(onSolidGround && !(player.x + player.w > platform.x &&
-			player.x < platform.x + platform.w)) {
-			onSolidGround = false;
+		if(state == PlayerState::onSolidGround || state == PlayerState::onTransientGround) {
+			xVel = xInput * moveSpeed;
+			if(spacePressed) {
+				// jump
+				state = PlayerState::inAir;
+				yVel += jumpSpeed;
+			}
+		}
+
+		if(state == PlayerState::onTransientGround) {
+			if(yInput < 0 && newY) {
+				// drop down
+				dropDown = true;
+				state = inAir;
+				yVel = -jumpSpeed / 4;
+			}
+		}
+
+		// ladder movement
+		if(state == PlayerState::onLadder) {
+			xVel = 0.0f;
+			yVel = yInput * moveSpeed;
+
+			if(spacePressed) {
+				if(xInput != 0) {
+					// jump
+					state = PlayerState::inAir;
+					yVel += jumpSpeed;
+				} else {
+					// drop down
+					dropDown = true;
+					state = inAir;
+					yVel = -jumpSpeed / 4;
+				}
+			}
 		}
 
 		// if player is not on solid ground
-		if(!onSolidGround) {
+		if(state == PlayerState::inAir) {
+			xVel = (float)xInput / 2.0f * moveSpeed;
 			yVel += gravity * dt;
-			player.y += yVel * dt;
 		}
 
+		// move x
+		player.x += xVel * dt;
+		if(player.x < 0) {
+			player.x = 0;
+			xVel = 0;
+		} else if(player.x + player.w > WorldWidth) {
+			player.x = WorldWidth - player.w;
+			xVel = 0;
+		}
+
+		// if player walked off platform
+		if(state == PlayerState::onTransientGround) {
+			state = PlayerState::inAir;
+			for(int i = 0; i < numPlatforms; i++) {
+				if(platform[i].onPlatform) {
+					if(!xOverlap(player, platform[i].rect)) {
+						platform[i].onPlatform = false;
+					} else {
+						state = PlayerState::onTransientGround;
+					}
+				}
+			}
+		}
+
+		// move y
+		player.y += yVel * dt;
 		if(player.y <= 0) {
 			player.y = 0;
 			yVel = 0;
-			onSolidGround = true;
-		} else {
-			abovePlatform = player.y > platform.y + platform.h &&
-				player.x + player.w > platform.x &&
-				player.x < platform.x + platform.w;
-			inPlatform = player.y > platform.y && 
-				player.y < platform.y + platform.h && 
-				player.x + player.w > platform.x && 
-				player.x < platform.x + platform.w;
-			if(lastAbovePlatform && inPlatform) {
-				player.y = platform.y + platform.h;
+			state = PlayerState::onSolidGround;
+		} else if(player.y + player.h > WorldHeight) {
+			player.y = WorldHeight - player.h;
+			yVel = 0;
+			state = PlayerState::inAir;
+		}
+
+		if(state == PlayerState::onLadder) {
+			if(isAbove(player, ladder)) {
+				state = PlayerState::inAir;
+				player.y = ladder.y + ladder.h;
 				yVel = 0;
-				onSolidGround = true;
 			}
+		}
+
+		for(int i = 0; i < numPlatforms; i++) {
+			if(dropDown) {
+				platform[i].onPlatform = false;
+				platform[i].abovePlatform = false;
+			} else {
+				platform[i].abovePlatform = isAbove(player, platform[i].rect) && xOverlap(player, platform[i].rect);
+				platform[i].underPlatform = isBelowTop(player, platform[i].rect) && xOverlap(player, platform[i].rect);
+				if(platform[i].wasAbovePlatform && platform[i].underPlatform) {
+					player.y = platform[i].rect.y + platform[i].rect.h;
+					yVel = 0;
+					platform[i].onPlatform = true;
+					state = PlayerState::onTransientGround;
+				}
+			}
+			platform[i].wasAbovePlatform = platform[i].abovePlatform;
 		}
 
 		// clear screen
@@ -206,14 +360,21 @@ int main(int argc, char *argv[]) {
 		SDL_Rect screenDest;
 
 		//draw platform
-		worldRectToRenderRect(platform, screenDest, pixPerHorizontalMeter, pixPerVerticalMeter, ScreenHeight);
-		SDL_SetRenderDrawColor(renderer, 0, 0, 128, 255);
+		for(int i = 0; i < numPlatforms; i++) {
+			worldRectToRenderRect(platform[i].rect, screenDest, screenProps);
+			SDL_SetRenderDrawColor(renderer, (i + 1 % 2) * 128, 0, (i % 2) * 128, 255);
+			SDL_RenderFillRect(renderer, &screenDest);
+		}
+
+		//draw ladder
+		worldRectToRenderRect(ladder, screenDest, screenProps);
+		SDL_SetRenderDrawColor(renderer, 128, 64, 64, 255);
 		SDL_RenderFillRect(renderer, &screenDest);
 
 		//draw player
-		worldRectToRenderRect(player, screenDest, pixPerHorizontalMeter, pixPerVerticalMeter, ScreenHeight);
-		if(inPlatform && !onSolidGround) {
-			SDL_SetRenderDrawColor(renderer, 128, 0, 0, 255);
+		worldRectToRenderRect(player, screenDest, screenProps);
+		if(state == PlayerState::inAir) {
+			SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
 		} else {
 			SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255);
 		}
@@ -225,8 +386,10 @@ int main(int argc, char *argv[]) {
 		// sleep
 		SDL_Delay(15);
 
+		// post-frame timing
 		msLastFrame = msThisFrame;
-		lastAbovePlatform = abovePlatform;
+
+		dropDown = false;
 	}
 
 	SDL_DestroyRenderer(renderer);

@@ -1,0 +1,14 @@
+Day 003 -- ???
+	added support for multiple platforms
+	player can walk from one platform to another level platform
+	player is now confined to the game world screen (currently [0.0f, 10.0f])
+	implemented a ladder
+
+Day 002 -- player-platform collision
+	player now properly lands on the platform;
+	player can walk off platform or press 'S' to fall through (ala Mario)
+
+Day 001 -- Player movement
+	created window, dimension-based room;
+	created temporary player;
+	player can walk, fall, and jump
