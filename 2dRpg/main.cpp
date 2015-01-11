@@ -1,5 +1,6 @@
-#include <iostream>
 #include <SDL.h>
+#include <SDL_ttf.h>
+#include <cstdio>
 
 inline void LogError() {
 	SDL_Log(SDL_GetError());
@@ -43,6 +44,7 @@ void worldRectToRenderRect(WorldRect &wRect, SDL_Rect &rRect, ScreenProperties &
 	rRect.y = screenProps.screenHeight - ((int)(wRect.y * screenProps.pixPerVerticalMeter) + rRect.h);
 }
 
+
 struct Platform {
 	WorldRect rect = {};
 	bool abovePlatform = false;
@@ -58,9 +60,82 @@ enum PlayerState {
 	onLadder
 };
 
+struct Button {
+	bool isDown;
+	bool wasDown;
+};
+
+struct Stick {
+	float startX;
+	float minX;
+	float maxX;
+	float endX;
+
+	float startY;
+	float minY;
+	float maxY;
+	float endY;
+};
+
+const int NumButtons = 6;
+struct Input {
+	bool isAnalog;
+	Stick stick;
+	union {
+		Button buttons[NumButtons];
+		struct {
+			Button arrowUp;
+			Button arrowDown;
+			Button arrowLeft;
+			Button arrowRight;
+			Button jump;
+			Button attack;
+		};
+	};
+};
+
+// set all lastValue to currentValue (everything that was new is now old)
+void changeFrame(Input &input) {
+	input.stick.startX = input.stick.minX = input.stick.maxX = input.stick.endX;
+	input.stick.startY = input.stick.minY = input.stick.maxY = input.stick.endY;
+	for(int i = 0; i < NumButtons; i++) {
+		input.buttons[i].wasDown = input.buttons[i].isDown;
+	}
+}
+
+// fills in analog stick values based on movement key values
+// input.stick.end{x/Y} get persisted by void changeFrame(Input &input);
+void buildAnalogInput(Input &input) {
+	if(!input.isAnalog) {
+		input.stick.endX = 0;
+		input.stick.endX += input.arrowRight.isDown;
+		input.stick.endX -= input.arrowLeft.isDown;
+		input.stick.endY = 0;
+		input.stick.endY += input.arrowUp.isDown;
+		input.stick.endY -= input.arrowDown.isDown;
+	}
+}
+
+char *newInputTextTemplate = "NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}";
+char *oldInputTextTemplate = "Delta   : {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}";
+const int textLen = 100;
+char newText[textLen];
+char oldText[textLen];
+
+SDL_Surface *renderTextBlended(TTF_Font *font, const char *text, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
+	SDL_Color color = {r, g, b, a};
+	return TTF_RenderText_Blended(font, text, color);
+}
+
 int main(int argc, char *argv[]) {
 
 	if(SDL_Init(SDL_INIT_EVERYTHING) != 0) {
+		LogError();
+		SDL_Quit();
+		return 1;
+	}
+
+	if(TTF_Init() < 0) {
 		LogError();
 		SDL_Quit();
 		return 1;
@@ -93,6 +168,16 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	TTF_Font *font = TTF_OpenFont("..\\font.ttf", 16);
+	if(font == NULL) {
+		SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Font is NULL");
+		LogError();
+		TTF_Quit();
+		SDL_Quit();
+		return 1;
+	}
+
+
 	Uint32 msLastFrame = SDL_GetTicks(); // ms
 	Uint32 msThisFrame = msLastFrame;    // ms
 	float dt = 0.0f; // seconds
@@ -108,6 +193,7 @@ int main(int argc, char *argv[]) {
 	player.h = 1.75f; // meters
 	float xVel = 0.0f;
 	float yVel = 0.0f;
+
 
 	PlayerState state = PlayerState::inAir;
 
@@ -133,11 +219,12 @@ int main(int argc, char *argv[]) {
 	platform[4].rect.w = ladder.w + 0.4f;
 	platform[4].rect.h = 0.5f;
 
-	bool newX = false;
-	int xInput = 0; // move direction
-	bool newY = false;
-	int yInput = 0; // move direction
-	bool spacePressed;
+	SDL_Texture *thisInputTexture = NULL;
+	SDL_Texture *lastInputTexture = NULL;
+
+	Input input = {};
+
+	bool shouldBreak = false;
 
 	bool isRunning = true;
 	while(isRunning) {
@@ -147,9 +234,7 @@ int main(int argc, char *argv[]) {
 		dt = (msThisFrame - msLastFrame) / 1000.0f;
 
 		// input processing
-		newX = false;
-		newY = false;
-		spacePressed = false;
+		changeFrame(input);
 		SDL_Event e;
 		while(SDL_PollEvent(&e)) {
 			switch(e.type) {
@@ -176,33 +261,25 @@ int main(int argc, char *argv[]) {
 				case SDL_Scancode::SDL_SCANCODE_ESCAPE:
 					isRunning = false;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_D:
-					if(xInput <= 0) {
-						newX = true;
-					}
-					xInput++;
+					input.arrowRight.isDown = true;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_A:
-					if(xInput >= 0) {
-						newX = true;
-					}
-					xInput--;
+					input.arrowLeft.isDown = true;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_W:
-					if(yInput <= 0) {
-						newY = true;
-					}
-					yInput++;
+					input.arrowUp.isDown = true;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_S:
-					if(yInput >= 0) {
-						newY = true;
-					}
-					yInput--;
+					input.arrowDown.isDown = true;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_SPACE:
-					spacePressed = true;
-					break;
+					input.jump.isDown = true;
 				}
 				break;
 
@@ -213,25 +290,33 @@ int main(int argc, char *argv[]) {
 
 				switch(e.key.keysym.scancode) {
 				case SDL_Scancode::SDL_SCANCODE_D:
-					xInput--;
+					input.arrowRight.isDown = false;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_A:
-					xInput++;
+					input.arrowLeft.isDown = false;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_W:
-					yInput--;
+					input.arrowUp.isDown = false;
 					break;
+
 				case SDL_Scancode::SDL_SCANCODE_S:
-					yInput++;
+					input.arrowDown.isDown = false;
 					break;
+
+				case SDL_Scancode::SDL_SCANCODE_SPACE:
+					input.jump.isDown = false;
 				}
 				break;
 			}
 		}
 
+		buildAnalogInput(input);
+
 		// process input
 		if(state != PlayerState::onLadder) {
-			if(yInput > 0) {
+			if(input.stick.endY > 0) {
 				if(isBelowTop(player, ladder) && xOverlap(player, ladder)) {
 					// attach to ladder
 					state = PlayerState::onLadder;
@@ -239,7 +324,7 @@ int main(int argc, char *argv[]) {
 				}
 			}
 
-			if(yInput < 0) {
+			if(input.stick.endY < 0) {
 				if(isBelowTop(player, ladder) && xOverlap(player, ladder)) {
 					// attach to ladder
 					state = PlayerState::onLadder;
@@ -249,8 +334,8 @@ int main(int argc, char *argv[]) {
 		}
 
 		if(state == PlayerState::onSolidGround || state == PlayerState::onTransientGround) {
-			xVel = xInput * moveSpeed;
-			if(spacePressed) {
+			xVel = input.stick.endX * moveSpeed;
+			if(input.jump.isDown && !input.jump.wasDown) {
 				// jump
 				state = PlayerState::inAir;
 				yVel += jumpSpeed;
@@ -258,7 +343,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		if(state == PlayerState::onTransientGround) {
-			if(yInput < 0 && newY) {
+			if(input.stick.endY < 0 && input.stick.startY >= 0) {
 				// drop down
 				dropDown = true;
 				state = inAir;
@@ -269,10 +354,10 @@ int main(int argc, char *argv[]) {
 		// ladder movement
 		if(state == PlayerState::onLadder) {
 			xVel = 0.0f;
-			yVel = yInput * moveSpeed;
+			yVel = input.stick.endY * moveSpeed;
 
-			if(spacePressed) {
-				if(xInput != 0) {
+			if(input.jump.isDown && !input.jump.wasDown) {
+				if(input.stick.endX != 0) {
 					// jump
 					state = PlayerState::inAir;
 					yVel += jumpSpeed;
@@ -287,7 +372,7 @@ int main(int argc, char *argv[]) {
 
 		// if player is not on solid ground
 		if(state == PlayerState::inAir) {
-			xVel = (float)xInput / 2.0f * moveSpeed;
+			xVel = input.stick.endX / 2.0f * moveSpeed;
 			yVel += gravity * dt;
 		}
 
@@ -339,9 +424,13 @@ int main(int argc, char *argv[]) {
 			if(dropDown) {
 				platform[i].onPlatform = false;
 				platform[i].abovePlatform = false;
+
 			} else {
-				platform[i].abovePlatform = isAbove(player, platform[i].rect) && xOverlap(player, platform[i].rect);
-				platform[i].underPlatform = isBelowTop(player, platform[i].rect) && xOverlap(player, platform[i].rect);
+				platform[i].abovePlatform = isAbove(player, platform[i].rect) && 
+											xOverlap(player, platform[i].rect);
+				platform[i].underPlatform = isBelowTop(player, platform[i].rect) &&
+											xOverlap(player, platform[i].rect);
+
 				if(platform[i].wasAbovePlatform && platform[i].underPlatform) {
 					player.y = platform[i].rect.y + platform[i].rect.h;
 					yVel = 0;
@@ -380,6 +469,53 @@ int main(int argc, char *argv[]) {
 		}
 		SDL_RenderFillRect(renderer, &screenDest);
 
+		//render new input
+		{
+			sprintf_s(newText, textLen, newInputTextTemplate,
+				input.arrowUp.isDown, 
+				input.arrowDown.isDown, 
+				input.arrowLeft.isDown, 
+				input.arrowRight.isDown, 
+				input.jump.isDown);
+
+			if(thisInputTexture != NULL) {
+				SDL_DestroyTexture(thisInputTexture);
+				thisInputTexture = NULL;
+			}
+			SDL_Surface *textSurface = TTF_RenderText_Blended(font, newText, SDL_Color {128, 128, 128, 0});
+			screenDest.x = 0;
+			screenDest.y = 0;
+			screenDest.w = textSurface->w;
+			screenDest.h = textSurface->h;
+			thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+			SDL_FreeSurface(textSurface);
+			SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
+		}
+
+		//render delta input
+		{
+			sprintf_s(oldText, textLen, oldInputTextTemplate,
+				input.arrowUp.isDown != input.arrowUp.wasDown, 
+				input.arrowDown.isDown != input.arrowDown.wasDown, 
+				input.arrowLeft.isDown != input.arrowLeft.wasDown, 
+				input.arrowRight.isDown != input.arrowRight.wasDown,
+				input.jump.isDown != input.jump.wasDown);
+
+			if(thisInputTexture != NULL) {
+				SDL_DestroyTexture(thisInputTexture);
+				thisInputTexture = NULL;
+			}
+
+			SDL_Surface *textSurface = TTF_RenderText_Blended(font, oldText, SDL_Color {128, 128, 128, 0});
+			screenDest.x = 0;
+			screenDest.y = textSurface->h;
+			screenDest.w = textSurface->w;
+			screenDest.h = textSurface->h;
+			thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+			SDL_FreeSurface(textSurface);
+			SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
+		}
+
 		// display screen
 		SDL_RenderPresent(renderer);
 
@@ -394,6 +530,7 @@ int main(int argc, char *argv[]) {
 
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
+	TTF_Quit();
 	SDL_Quit();
 	return 0;
 }

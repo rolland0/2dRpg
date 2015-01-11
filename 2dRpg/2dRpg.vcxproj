@@ -45,6 +45,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>W:\lib\sdl_2\include;W:\lib\sdl_ttf_2\include;W:\lib\sdl_img_2\include</AdditionalIncludeDirectories>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -53,7 +54,10 @@
       <SubSystem>Windows</SubSystem>
     </Link>
     <PostBuildEvent>
-      <Command>copy w:\lib\sdl_2\lib\x86\*.dll $(OutDir) &gt; nul</Command>
+      <Command>copy w:\lib\sdl_2\lib\x86\*.dll $(OutDir) &gt; nul
+copy w:\lib\sdl_ttf_2\lib\x86\*.dll $(OutDir) &gt; nul
+copy w:\lib\sdl_img_2\lib\x86\*.dll $(OutDir) &gt; nul
+copy $(SolutionDir)\res\* $(OutDir) &gt; nul</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -64,6 +68,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>W:\lib\sdl_2\include;W:\lib\sdl_ttf_2\include;W:\lib\sdl_img_2\include</AdditionalIncludeDirectories>
+      <TreatWarningAsError>true</TreatWarningAsError>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -74,7 +79,10 @@
       <SubSystem>Windows</SubSystem>
     </Link>
     <PostBuildEvent>
-      <Command>copy w:\lib\sdl_2\lib\x86\*.dll $(OutDir) &gt; nul</Command>
+      <Command>copy w:\lib\sdl_2\lib\x86\*.dll $(OutDir) &gt; nul
+copy w:\lib\sdl_ttf_2\lib\x86\*.dll $(OutDir) &gt; nul
+copy w:\lib\sdl_img_2\lib\x86\*.dll $(OutDir) &gt; nul
+copy $(SolutionDir)\res\* $(OutDir) &gt; nul</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

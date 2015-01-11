@@ -1,4 +1,8 @@
-Day 003 -- ???
+Day 004 -- debug rendering
+	changed input tracking
+	added debugTextRendering
+
+Day 003 -- multiple platforms, single ladder
 	added support for multiple platforms
 	player can walk from one platform to another level platform
 	player is now confined to the game world screen (currently [0.0f, 10.0f])
