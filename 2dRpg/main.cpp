@@ -6,6 +6,14 @@ inline void LogError() {
 	SDL_Log(SDL_GetError());
 }
 
+void breakHere() {}
+
+float clamp(float val, float min, float max) {
+	if(val < min) return min;
+	if(val > max) return max;
+	return val;
+}
+
 struct WorldRect {
 	float x;
 	float y;
@@ -51,6 +59,11 @@ struct Platform {
 	bool underPlatform = false;
 	bool wasAbovePlatform = false;
 	bool onPlatform = false;
+};
+
+struct Ladder {
+	WorldRect rect = {};
+	bool isOccupied = false;
 };
 
 enum PlayerState {
@@ -118,9 +131,9 @@ void buildAnalogInput(Input &input) {
 
 char *newInputTextTemplate = "NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}";
 char *oldInputTextTemplate = "Delta   : {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}";
+char *TextTemplateMousePos = "WorldMouse: {%f,%f}  ScreenMouse: {%d,%d}";
 const int textLen = 100;
-char newText[textLen];
-char oldText[textLen];
+char Text[textLen];
 
 SDL_Surface *renderTextBlended(TTF_Font *font, const char *text, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
 	SDL_Color color = {r, g, b, a};
@@ -177,14 +190,13 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-
 	Uint32 msLastFrame = SDL_GetTicks(); // ms
 	Uint32 msThisFrame = msLastFrame;    // ms
 	float dt = 0.0f; // seconds
 
 	float moveSpeed = 2.68224f; // meters per second
 	float gravity = -9.8f; // meters per second per second
-	float jumpSpeed = 9.0f; // meters per second
+	float jumpSpeed = 6.0f; // meters per second
 
 	WorldRect player = {};
 	player.x = 0.00f; // meters
@@ -194,36 +206,38 @@ int main(int argc, char *argv[]) {
 	float xVel = 0.0f;
 	float yVel = 0.0f;
 
-
 	PlayerState state = PlayerState::inAir;
 
-	WorldRect ladder = {};
-	ladder.x = 2.0f;
-	ladder.y = 0.0f;
-	ladder.w = 0.5f;
-	ladder.h = 6.0f;
-	bool onThisLadder = false;
 
 	bool dropDown = false;
 
-	const int numPlatforms = 5;
+	const int numSoloPlatforms = 4;
+	const int numLadders = 4;
+	const int numPlatforms = numSoloPlatforms + numLadders;
+
 	Platform platform[numPlatforms];
-	for(int i = 0; i < 4; i++) {
+	for(int i = 0; i < numSoloPlatforms; i++) {
 		platform[i].rect.x = 4.0f + i * 1.3f; // meters
 		platform[i].rect.y = 2.0f; // meters
 		platform[i].rect.w = 1.0f; // meters
 		platform[i].rect.h = 0.5f; // meters
 	}
-	platform[4].rect.x = ladder.x - 0.2f;
-	platform[4].rect.y = ladder.h - 0.5f;
-	platform[4].rect.w = ladder.w + 0.4f;
-	platform[4].rect.h = 0.5f;
+
+	Ladder ladder[numLadders];
+	for(int i = 0; i < numLadders; i++) {
+		ladder[i].rect = {2.0f + i * 2.0f, 0.0f, 0.5f, 6.0f};
+		platform[i + numSoloPlatforms].rect.x = ladder[i].rect.x - 0.2f;
+		platform[i + numSoloPlatforms].rect.y = ladder[i].rect.h - 0.5f;
+		platform[i + numSoloPlatforms].rect.w = ladder[i].rect.w + 0.4f;
+		platform[i + numSoloPlatforms].rect.h = 0.5f;
+	}
 
 	SDL_Texture *thisInputTexture = NULL;
 	SDL_Texture *lastInputTexture = NULL;
 
 	Input input = {};
 
+	bool drawDebug = true;
 	bool shouldBreak = false;
 
 	bool isRunning = true;
@@ -280,6 +294,15 @@ int main(int argc, char *argv[]) {
 
 				case SDL_Scancode::SDL_SCANCODE_SPACE:
 					input.jump.isDown = true;
+					break;
+
+				case SDL_Scancode::SDL_SCANCODE_F1:
+					breakHere();
+					break;
+
+				case SDL_Scancode::SDL_SCANCODE_F4:
+					drawDebug = !drawDebug;
+					break;
 				}
 				break;
 
@@ -307,28 +330,28 @@ int main(int argc, char *argv[]) {
 
 				case SDL_Scancode::SDL_SCANCODE_SPACE:
 					input.jump.isDown = false;
+					break;
 				}
 				break;
 			}
 		}
 
+		// emulate joystick values from arrow/WASD keys
 		buildAnalogInput(input);
 
 		// process input
 		if(state != PlayerState::onLadder) {
-			if(input.stick.endY > 0) {
-				if(isBelowTop(player, ladder) && xOverlap(player, ladder)) {
-					// attach to ladder
-					state = PlayerState::onLadder;
-					player.x = ladder.x + (ladder.w - player.w) / 2;
-				}
-			}
-
-			if(input.stick.endY < 0) {
-				if(isBelowTop(player, ladder) && xOverlap(player, ladder)) {
-					// attach to ladder
-					state = PlayerState::onLadder;
-					player.x = ladder.x + (ladder.w - player.w) / 2;
+			if(input.stick.endY != 0) {
+				for(int i = 0; i < numLadders; i++) {
+					if(isBelowTop(player, ladder[i].rect) && xOverlap(player, ladder[i].rect)) {
+						// attach to ladder
+						state = PlayerState::onLadder;
+						player.x = ladder[i].rect.x + (ladder[i].rect.w - player.w) / 2;
+						ladder[i].isOccupied = true;
+						break;
+					} else {
+						ladder[i].isOccupied = false;
+					}
 				}
 			}
 		}
@@ -372,7 +395,8 @@ int main(int argc, char *argv[]) {
 
 		// if player is not on solid ground
 		if(state == PlayerState::inAir) {
-			xVel = input.stick.endX / 2.0f * moveSpeed;
+			//launchXvel = clamp((launchXvel + input.stick.endX * dt * 100), -1, 1);
+			xVel = input.stick.endX * moveSpeed;
 			yVel += gravity * dt;
 		}
 
@@ -398,7 +422,13 @@ int main(int argc, char *argv[]) {
 					}
 				}
 			}
+
+			// if player is now in the air
+			if(state == PlayerState::inAir) {
+
+			}
 		}
+
 
 		// move y
 		player.y += yVel * dt;
@@ -413,10 +443,13 @@ int main(int argc, char *argv[]) {
 		}
 
 		if(state == PlayerState::onLadder) {
-			if(isAbove(player, ladder)) {
-				state = PlayerState::inAir;
-				player.y = ladder.y + ladder.h;
-				yVel = 0;
+			for(int i = 0; i < numLadders; i++) {
+				if(isAbove(player, ladder[i].rect)) {
+					state = PlayerState::inAir;
+					player.y = ladder[i].rect.y + ladder[i].rect.h;
+					yVel = 0;
+					break;
+				}
 			}
 		}
 
@@ -448,17 +481,19 @@ int main(int argc, char *argv[]) {
 		// draw rect
 		SDL_Rect screenDest;
 
+		//draw ladder
+		SDL_SetRenderDrawColor(renderer, 128, 64, 64, 255);
+		for(int i = 0; i < numLadders; i++) {
+			worldRectToRenderRect(ladder[i].rect, screenDest, screenProps);
+			SDL_RenderFillRect(renderer, &screenDest);
+		}
+
 		//draw platform
 		for(int i = 0; i < numPlatforms; i++) {
 			worldRectToRenderRect(platform[i].rect, screenDest, screenProps);
 			SDL_SetRenderDrawColor(renderer, (i + 1 % 2) * 128, 0, (i % 2) * 128, 255);
 			SDL_RenderFillRect(renderer, &screenDest);
 		}
-
-		//draw ladder
-		worldRectToRenderRect(ladder, screenDest, screenProps);
-		SDL_SetRenderDrawColor(renderer, 128, 64, 64, 255);
-		SDL_RenderFillRect(renderer, &screenDest);
 
 		//draw player
 		worldRectToRenderRect(player, screenDest, screenProps);
@@ -469,51 +504,77 @@ int main(int argc, char *argv[]) {
 		}
 		SDL_RenderFillRect(renderer, &screenDest);
 
-		//render new input
-		{
-			sprintf_s(newText, textLen, newInputTextTemplate,
-				input.arrowUp.isDown, 
-				input.arrowDown.isDown, 
-				input.arrowLeft.isDown, 
-				input.arrowRight.isDown, 
-				input.jump.isDown);
+		if(drawDebug) {
+			//render new input
+			{
+				sprintf_s(Text, textLen, newInputTextTemplate,
+					input.arrowUp.isDown,
+					input.arrowDown.isDown,
+					input.arrowLeft.isDown,
+					input.arrowRight.isDown,
+					input.jump.isDown);
 
-			if(thisInputTexture != NULL) {
-				SDL_DestroyTexture(thisInputTexture);
-				thisInputTexture = NULL;
-			}
-			SDL_Surface *textSurface = TTF_RenderText_Blended(font, newText, SDL_Color {128, 128, 128, 0});
-			screenDest.x = 0;
-			screenDest.y = 0;
-			screenDest.w = textSurface->w;
-			screenDest.h = textSurface->h;
-			thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-			SDL_FreeSurface(textSurface);
-			SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
-		}
-
-		//render delta input
-		{
-			sprintf_s(oldText, textLen, oldInputTextTemplate,
-				input.arrowUp.isDown != input.arrowUp.wasDown, 
-				input.arrowDown.isDown != input.arrowDown.wasDown, 
-				input.arrowLeft.isDown != input.arrowLeft.wasDown, 
-				input.arrowRight.isDown != input.arrowRight.wasDown,
-				input.jump.isDown != input.jump.wasDown);
-
-			if(thisInputTexture != NULL) {
-				SDL_DestroyTexture(thisInputTexture);
-				thisInputTexture = NULL;
+				if(thisInputTexture != NULL) {
+					SDL_DestroyTexture(thisInputTexture);
+					thisInputTexture = NULL;
+				}
+				SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
+				screenDest.x = 0;
+				screenDest.y = textSurface->h * 0;
+				screenDest.w = textSurface->w;
+				screenDest.h = textSurface->h;
+				thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+				SDL_FreeSurface(textSurface);
+				SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
 			}
 
-			SDL_Surface *textSurface = TTF_RenderText_Blended(font, oldText, SDL_Color {128, 128, 128, 0});
-			screenDest.x = 0;
-			screenDest.y = textSurface->h;
-			screenDest.w = textSurface->w;
-			screenDest.h = textSurface->h;
-			thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-			SDL_FreeSurface(textSurface);
-			SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
+				//render delta input
+			{
+				sprintf_s(Text, textLen, oldInputTextTemplate,
+					input.arrowUp.isDown != input.arrowUp.wasDown,
+					input.arrowDown.isDown != input.arrowDown.wasDown,
+					input.arrowLeft.isDown != input.arrowLeft.wasDown,
+					input.arrowRight.isDown != input.arrowRight.wasDown,
+					input.jump.isDown != input.jump.wasDown);
+
+				if(thisInputTexture != NULL) {
+					SDL_DestroyTexture(thisInputTexture);
+					thisInputTexture = NULL;
+				}
+
+				SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
+				screenDest.x = 0;
+				screenDest.y = textSurface->h * 1;
+				screenDest.w = textSurface->w;
+				screenDest.h = textSurface->h;
+				thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+				SDL_FreeSurface(textSurface);
+				SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
+			}
+
+			//render mouse position text
+			{
+				int mouseX, mouseY;
+				SDL_GetMouseState(&mouseX, &mouseY);
+				sprintf_s(Text, textLen, TextTemplateMousePos,
+					mouseX / screenProps.pixPerHorizontalMeter,
+					mouseY / screenProps.pixPerVerticalMeter,
+					mouseX, mouseY);
+
+				if(thisInputTexture != NULL) {
+					SDL_DestroyTexture(thisInputTexture);
+					thisInputTexture = NULL;
+				}
+
+				SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
+				screenDest.x = 0;
+				screenDest.y = textSurface->h * 2;
+				screenDest.w = textSurface->w;
+				screenDest.h = textSurface->h;
+				thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+				SDL_FreeSurface(textSurface);
+				SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
+			}
 		}
 
 		// display screen

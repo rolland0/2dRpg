@@ -1,3 +1,7 @@
+Day 004_1 -- multi-ladder
+	extended ladder support into multiple ladders support
+	added mouse screen-position and world-position to debug info
+
 Day 004 -- debug rendering
 	changed input tracking
 	added debugTextRendering
