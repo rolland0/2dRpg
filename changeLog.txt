@@ -1,3 +1,7 @@
+Day 005 -- tilemap
+	created a rough tilemap
+	needs revision
+
 Day 004_1 -- multi-ladder
 	extended ladder support into multiple ladders support
 	added mouse screen-position and world-position to debug info

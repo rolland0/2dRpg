@@ -1,6 +1,8 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
 #include <cstdio>
+#include <fstream>
+#include <string>
 
 inline void LogError() {
 	SDL_Log(SDL_GetError());
@@ -52,6 +54,12 @@ void worldRectToRenderRect(WorldRect &wRect, SDL_Rect &rRect, ScreenProperties &
 	rRect.y = screenProps.screenHeight - ((int)(wRect.y * screenProps.pixPerVerticalMeter) + rRect.h);
 }
 
+enum TileType {
+	TileNone = 0,
+	TilePlatform = 1,
+	TileLadder = 2,
+	TileLadderPlatform = 3
+};
 
 struct Platform {
 	WorldRect rect = {};
@@ -117,7 +125,7 @@ void changeFrame(Input &input) {
 }
 
 // fills in analog stick values based on movement key values
-// input.stick.end{x/Y} get persisted by void changeFrame(Input &input);
+// input.stick.end{X/Y} get persisted by function "void changeFrame(Input &input)"
 void buildAnalogInput(Input &input) {
 	if(!input.isAnalog) {
 		input.stick.endX = 0;
@@ -138,6 +146,102 @@ char Text[textLen];
 SDL_Surface *renderTextBlended(TTF_Font *font, const char *text, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
 	SDL_Color color = {r, g, b, a};
 	return TTF_RenderText_Blended(font, text, color);
+}
+
+struct Tile {
+	TileType type = TileType::TileNone;
+	void *tileData = NULL;
+};
+
+struct TileMap {
+	static const int Width = 10;
+	static const int Height = 10;
+	float tileWidth = 0.0f;
+	float tileHeight = 0.0f;
+
+	Tile tiles[Height][Width];
+
+	Ladder *ladders = NULL;
+	int numLadders = 0;
+
+	Platform *platforms = NULL;
+	int numPlatforms = 0;
+};
+
+void initTileMap(TileMap &map, float worldWidth, float worldHeight) {
+	map.platforms = (Platform*)malloc(sizeof(Platform)*map.numPlatforms);
+	map.ladders = (Ladder*)malloc(sizeof(Ladder)*map.numLadders);
+	int curLadder = 0;
+	int curPlatform = 0;
+
+	map.tileWidth = worldWidth / map.Width;
+	map.tileHeight = worldHeight / map.Height;
+	for(int y = 0; y < map.Height; y++) {
+		for(int x = 0; x < map.Height; x++) {
+			switch(map.tiles[y][x].type) {
+			case TileNone:
+				break;
+
+			case TilePlatform:
+				map.platforms[curPlatform] = {};
+				map.platforms[curPlatform].rect = {x*map.tileWidth, ((map.Height - 1) - y)*map.tileHeight, map.tileWidth, map.tileHeight / 2};
+				curPlatform++;
+				break;
+
+			case TileLadder:
+				map.ladders[curLadder] = {};
+				map.ladders[curLadder].rect = {x*map.tileWidth, ((map.Height - 1) - y)*map.tileHeight, map.tileWidth / 2, map.tileHeight};
+				curLadder++;
+				break;
+
+			case TileLadderPlatform:
+				map.platforms[curPlatform] = {};
+				map.platforms[curPlatform].rect = {x*map.tileWidth, ((map.Height - 1) - y)*map.tileHeight, map.tileWidth, map.tileHeight / 2};
+				curPlatform++;
+
+				map.ladders[curLadder] = {};
+				map.ladders[curLadder].rect = {x*map.tileWidth, ((map.Height - 1) - y)*map.tileHeight, map.tileWidth / 2, map.tileHeight};
+				curLadder++;
+				break;
+			}
+		}
+	}
+}
+
+void readTileMapText(TileMap &map, const char* filename) {
+	std::ifstream file;
+	std::string line;
+	file.open(filename);
+	if(file.is_open()) {
+		int lineCount = 0;
+		while(getline(file, line)) {
+			for(unsigned int i = 0; i < line.length() && i < TileMap::Height; i++) {
+				TileType type = (TileType)(line.at(i) - '0');
+				switch(type) {
+				case TileType::TileNone:
+					break;
+				case TileType::TilePlatform:
+					map.numPlatforms++;
+					break;
+				case TileType::TileLadder:
+					map.numLadders++;
+					break;
+				case TileType::TileLadderPlatform:
+					map.numPlatforms++;
+					map.numLadders++;
+					break;
+				}
+				map.tiles[lineCount][i].type = type;
+			}
+			lineCount++;
+		}
+		file.close();
+	}
+}
+
+void freeTileMap(TileMap &map) {
+	free(map.platforms);
+	free(map.ladders);
 }
 
 int main(int argc, char *argv[]) {
@@ -181,7 +285,7 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	TTF_Font *font = TTF_OpenFont("..\\font.ttf", 16);
+	TTF_Font *font = TTF_OpenFont("..\\res\\font.ttf", 16);
 	if(font == NULL) {
 		SDL_LogError(SDL_LOG_CATEGORY_VIDEO, "Font is NULL");
 		LogError();
@@ -196,7 +300,7 @@ int main(int argc, char *argv[]) {
 
 	float moveSpeed = 2.68224f; // meters per second
 	float gravity = -9.8f; // meters per second per second
-	float jumpSpeed = 6.0f; // meters per second
+	float jumpSpeed = 12.0f; // meters per second
 
 	WorldRect player = {};
 	player.x = 0.00f; // meters
@@ -211,35 +315,23 @@ int main(int argc, char *argv[]) {
 
 	bool dropDown = false;
 
-	const int numSoloPlatforms = 4;
-	const int numLadders = 4;
-	const int numPlatforms = numSoloPlatforms + numLadders;
-
-	Platform platform[numPlatforms];
-	for(int i = 0; i < numSoloPlatforms; i++) {
-		platform[i].rect.x = 4.0f + i * 1.3f; // meters
-		platform[i].rect.y = 2.0f; // meters
-		platform[i].rect.w = 1.0f; // meters
-		platform[i].rect.h = 0.5f; // meters
-	}
-
-	Ladder ladder[numLadders];
-	for(int i = 0; i < numLadders; i++) {
-		ladder[i].rect = {2.0f + i * 2.0f, 0.0f, 0.5f, 6.0f};
-		platform[i + numSoloPlatforms].rect.x = ladder[i].rect.x - 0.2f;
-		platform[i + numSoloPlatforms].rect.y = ladder[i].rect.h - 0.5f;
-		platform[i + numSoloPlatforms].rect.w = ladder[i].rect.w + 0.4f;
-		platform[i + numSoloPlatforms].rect.h = 0.5f;
-	}
+	TileMap map = {};
+	readTileMapText(map, "..\\res\\TileMap.txt");
+	initTileMap(map, WorldWidth, WorldHeight);
 
 	SDL_Texture *thisInputTexture = NULL;
 	SDL_Texture *lastInputTexture = NULL;
 
 	Input input = {};
 
-	bool drawDebug = true;
-	bool shouldBreak = false;
+	Tile *lastCollidedTiles[10] = {};
+	Tile *thisCollidedTiles[10] = {};
 
+
+
+	bool drawDebug = true;
+	bool drawTileGrid = false;
+	bool shouldBreak = false;
 	bool isRunning = true;
 	while(isRunning) {
 
@@ -300,6 +392,10 @@ int main(int argc, char *argv[]) {
 					breakHere();
 					break;
 
+				case SDL_Scancode::SDL_SCANCODE_F2:
+					drawTileGrid = !drawTileGrid;
+					break;
+
 				case SDL_Scancode::SDL_SCANCODE_F4:
 					drawDebug = !drawDebug;
 					break;
@@ -339,18 +435,34 @@ int main(int argc, char *argv[]) {
 		// emulate joystick values from arrow/WASD keys
 		buildAnalogInput(input);
 
+		for(int i = 0; i < 10; i++) {
+			lastCollidedTiles[i] = thisCollidedTiles[i];
+			thisCollidedTiles[i] = NULL;
+		}
+		int numCollidedTiles = 0;
+		int minTileX = (int)(player.x / map.tileWidth);
+		int maxTileX = (int)((player.x + player.w) / map.tileWidth) + 1;
+		int minTileY = (int)(player.y / map.tileHeight);
+		int maxTileY = (int)((player.y + player.h) / map.tileHeight) + 1;
+		for(int tileY = minTileY; tileY < maxTileY; tileY++) {
+			for(int tileX = minTileX; tileX < maxTileX; tileX++) {
+				thisCollidedTiles[numCollidedTiles++] = &map.tiles[tileY][tileX];
+			}
+		}
+		//WorldRect collideRect = {(float)minTileX, (float)minTileY, (float)maxTileX - minTileX, (float)maxTileY - minTileY};
+
 		// process input
 		if(state != PlayerState::onLadder) {
 			if(input.stick.endY != 0) {
-				for(int i = 0; i < numLadders; i++) {
-					if(isBelowTop(player, ladder[i].rect) && xOverlap(player, ladder[i].rect)) {
+				for(int i = 0; i < map.numLadders; i++) {
+					if(isBelowTop(player, map.ladders[i].rect) && xOverlap(player, map.ladders[i].rect)) {
 						// attach to ladder
 						state = PlayerState::onLadder;
-						player.x = ladder[i].rect.x + (ladder[i].rect.w - player.w) / 2;
-						ladder[i].isOccupied = true;
+						player.x = map.ladders[i].rect.x + (map.ladders[i].rect.w - player.w) / 2;
+						map.ladders[i].isOccupied = true;
 						break;
 					} else {
-						ladder[i].isOccupied = false;
+						map.ladders[i].isOccupied = false;
 					}
 				}
 			}
@@ -413,10 +525,10 @@ int main(int argc, char *argv[]) {
 		// if player walked off platform
 		if(state == PlayerState::onTransientGround) {
 			state = PlayerState::inAir;
-			for(int i = 0; i < numPlatforms; i++) {
-				if(platform[i].onPlatform) {
-					if(!xOverlap(player, platform[i].rect)) {
-						platform[i].onPlatform = false;
+			for(int i = 0; i < map.numPlatforms; i++) {
+				if(map.platforms[i].onPlatform) {
+					if(!xOverlap(player, map.platforms[i].rect)) {
+						map.platforms[i].onPlatform = false;
 					} else {
 						state = PlayerState::onTransientGround;
 					}
@@ -443,35 +555,35 @@ int main(int argc, char *argv[]) {
 		}
 
 		if(state == PlayerState::onLadder) {
-			for(int i = 0; i < numLadders; i++) {
-				if(isAbove(player, ladder[i].rect)) {
+			for(int i = 0; i < map.numLadders; i++) {
+				if(isAbove(player, map.ladders[i].rect)) {
 					state = PlayerState::inAir;
-					player.y = ladder[i].rect.y + ladder[i].rect.h;
+					player.y = map.ladders[i].rect.y + map.ladders[i].rect.h;
 					yVel = 0;
 					break;
 				}
 			}
 		}
 
-		for(int i = 0; i < numPlatforms; i++) {
+		for(int i = 0; i < map.numPlatforms; i++) {
 			if(dropDown) {
-				platform[i].onPlatform = false;
-				platform[i].abovePlatform = false;
+				map.platforms[i].onPlatform = false;
+				map.platforms[i].abovePlatform = false;
 
 			} else {
-				platform[i].abovePlatform = isAbove(player, platform[i].rect) && 
-											xOverlap(player, platform[i].rect);
-				platform[i].underPlatform = isBelowTop(player, platform[i].rect) &&
-											xOverlap(player, platform[i].rect);
+				map.platforms[i].abovePlatform = isAbove(player, map.platforms[i].rect) && 
+											xOverlap(player, map.platforms[i].rect);
+				map.platforms[i].underPlatform = isBelowTop(player, map.platforms[i].rect) &&
+											xOverlap(player, map.platforms[i].rect);
 
-				if(platform[i].wasAbovePlatform && platform[i].underPlatform) {
-					player.y = platform[i].rect.y + platform[i].rect.h;
+				if(map.platforms[i].wasAbovePlatform && map.platforms[i].underPlatform) {
+					player.y = map.platforms[i].rect.y + map.platforms[i].rect.h;
 					yVel = 0;
-					platform[i].onPlatform = true;
+					map.platforms[i].onPlatform = true;
 					state = PlayerState::onTransientGround;
 				}
 			}
-			platform[i].wasAbovePlatform = platform[i].abovePlatform;
+			map.platforms[i].wasAbovePlatform = map.platforms[i].abovePlatform;
 		}
 
 		// clear screen
@@ -481,28 +593,74 @@ int main(int argc, char *argv[]) {
 		// draw rect
 		SDL_Rect screenDest;
 
+		//// draw collide rect
+		//for(int i = 0; i < 10; i++) {
+		//	Tile *tile = thisCollidedTiles[i];
+		//	if(tile != NULL) {
+		//		switch(tile->type) {
+		//			case TileNone
+		//		}
+		//		WorldRect rect = {tile->};
+		//	}
+		//}
+
+		//worldRectToRenderRect(collideRect, screenDest, screenProps);
+		//SDL_SetRenderDrawColor(renderer, 128, 64, 0, 255);
+		//SDL_RenderFillRect(renderer, &screenDest);
+
 		//draw ladder
 		SDL_SetRenderDrawColor(renderer, 128, 64, 64, 255);
-		for(int i = 0; i < numLadders; i++) {
-			worldRectToRenderRect(ladder[i].rect, screenDest, screenProps);
+		for(int i = 0; i < map.numLadders; i++) {
+			worldRectToRenderRect(map.ladders[i].rect, screenDest, screenProps);
 			SDL_RenderFillRect(renderer, &screenDest);
 		}
 
 		//draw platform
-		for(int i = 0; i < numPlatforms; i++) {
-			worldRectToRenderRect(platform[i].rect, screenDest, screenProps);
+		for(int i = 0; i < map.numPlatforms; i++) {
+			worldRectToRenderRect(map.platforms[i].rect, screenDest, screenProps);
 			SDL_SetRenderDrawColor(renderer, (i + 1 % 2) * 128, 0, (i % 2) * 128, 255);
 			SDL_RenderFillRect(renderer, &screenDest);
 		}
 
+		////tile map
+		//float w = (WorldWidth / TileMap::Width) * screenProps.pixPerHorizontalMeter;
+		//float h = (WorldHeight / TileMap::Height) * screenProps.pixPerVerticalMeter;
+		//screenDest.w = (int)w;
+		//screenDest.h = (int)h;
+		//for(int y = 0; y < TileMap::Height; y++) {
+		//	for(int x = 0; x < TileMap::Width; x++) {
+		//		screenDest.y = (int)(h * y);
+		//		screenDest.x = (int)(w * x);
+		//		Uint8 value = map.tiles[y][x].type;
+		//		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+		//		if(value == 1) {
+		//			SDL_SetRenderDrawColor(renderer, 0, 0, 128, 255);
+		//		} else if(value == 2) {
+		//			SDL_SetRenderDrawColor(renderer, 128, 0, 0, 255);
+		//		} else if(value == 3) {
+		//			SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
+		//		}
+		//		//SDL_SetRenderDrawColor(renderer, value * 50, 0, 0, 255);
+		//		SDL_RenderFillRect(renderer, &screenDest);
+		//	}
+		//}
+
 		//draw player
 		worldRectToRenderRect(player, screenDest, screenProps);
-		if(state == PlayerState::inAir) {
-			SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
-		} else {
-			SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255);
-		}
+		SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255);
 		SDL_RenderFillRect(renderer, &screenDest);
+
+		//draw tile grid
+		if(drawTileGrid) {
+			SDL_SetRenderDrawColor(renderer, 0, 128, 0, 255);
+			for(int y = 0; y < map.Height; y++) {
+				for(int x = 0; x < map.Width; x++) {
+					WorldRect rect = {x*map.tileWidth, y*map.tileHeight, map.tileWidth, map.tileHeight};
+					worldRectToRenderRect(rect, screenDest, screenProps);
+					SDL_RenderDrawRect(renderer, &screenDest);
+				}
+			}
+		}
 
 		if(drawDebug) {
 			//render new input
@@ -588,7 +746,7 @@ int main(int argc, char *argv[]) {
 
 		dropDown = false;
 	}
-
+	freeTileMap(map);
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
 	TTF_Quit();
