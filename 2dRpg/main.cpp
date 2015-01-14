@@ -10,6 +10,10 @@ inline void LogError() {
 
 void breakHere() {}
 
+int min(int a, int b) {
+	return (a < b) ? a : b ;
+}
+
 float clamp(float val, float min, float max) {
 	if(val < min) return min;
 	if(val > max) return max;
@@ -147,9 +151,6 @@ void buildAnalogInput(Input &input) {
 	}
 }
 
-char *newInputTextTemplate = "NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}";
-char *oldInputTextTemplate = "Delta   : {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}";
-char *TextTemplateMousePos = "WorldMouse: {%f,%f}  ScreenMouse: {%d,%d}";
 const int textLen = 100;
 char Text[textLen];
 
@@ -472,6 +473,11 @@ int main(int argc, char *argv[]) {
 		int maxTileY = (int)((player.y + player.h) / map.tileHeight) + 1;
 
 		bool isOnTransientGround = false;
+		bool isOnLadder = false;
+
+		//TODO: Standing on top of a ladder is buggy;
+		// player continuously falls into the ladder
+
 		for(int tileY = minTileY; tileY < maxTileY; tileY++) {
 			for(int tileX = minTileX; tileX < maxTileX; tileX++) {
 				Tile *tile = &map.tiles[tileY][tileX];
@@ -485,7 +491,8 @@ int main(int argc, char *argv[]) {
 					// if the player was in the air, and was above platform, and is now under top layer...
 					// then player is on the platform
 					if(state == PlayerState::inAir) {
-						if(isAbove(playerPosCopy, wRect) && isBelowTop(player, wRect) && xOverlap(player, wRect)) {
+						if(isAbove(playerPosCopy, wRect) && xOverlap(playerPosCopy, wRect) &&
+							   isBelowTop(player, wRect) && xOverlap(player, wRect)) {
 							// land on platform
 							state = PlayerState::onTransientGround;
 							isOnTransientGround = true;
@@ -499,17 +506,78 @@ int main(int argc, char *argv[]) {
 						if(isAbove(player, wRect) && xOverlap(player, wRect)) {
 							isOnTransientGround = true;
 						}
+
+					// if the player was going down a ladder and is now on this platform...
+					// then the player is now on this platform
+					} else if(state == PlayerState::onLadder) {
+						if( yVel < 0 && xOverlap(player, wRect) && isBelowTop(player, wRect)) {
+							// land on platform
+							state = PlayerState::onTransientGround;
+							isOnTransientGround = true;
+							yVel = 0;
+							player.y = tile->yPos + tile->hitboxHeight;
+						}
 					}
 					break;
 
 				case TileType::TileLadder:
+					// if the player is on a ladder, and is vertically on this ladder...
+					// then the player is still on this ladder
+					if(state == PlayerState::onLadder) {
+						if(xOverlap(player, wRect) && !isBelowBottom(player, wRect) && !isAbove(player, wRect)) {
+							isOnLadder = true;
+						}
+					} else {
+
+						// if the player was not on a ladder, and the player presses up or down,
+						// and the player is overlapping this ladder...
+						// then the player is now on this ladder
+						if(input.stick.endY > 0 || input.stick.endY < 0) {
+							if(xOverlap(player, wRect) && !isBelowBottom(player, wRect) && !isAbove(player, wRect)) {
+								isOnLadder = true;
+								state = PlayerState::onLadder;
+								xVel = 0;
+								yVel = 0;
+								player.x = tile->xPos + (tile->hitboxWidth - player.w) / 2;
+							}
+						}
+					}
+
+					// if the player was in the air, and was above platform, and is now under top layer,
+					// and this ladder is not below another ladder...
+					// then player is on the ladder top
+					if(state == PlayerState::inAir) {
+						bool ladderHasNoLadderAboveIt = true;
+						if(tileY < (maxTileY - 1)) {
+							if(map.tiles[tileY + 1][tileX].type == TileType::TileLadder) {
+								ladderHasNoLadderAboveIt = false;
+							}
+						}
+						if(ladderHasNoLadderAboveIt &&
+							isAbove(playerPosCopy, wRect) && xOverlap(playerPosCopy, wRect) &&
+							isBelowTop(player, wRect) && xOverlap(player, wRect)) {
+							// land on platform
+							state = PlayerState::onTransientGround;
+							isOnTransientGround = true;
+							yVel = 0;
+							player.y = tile->yPos + tile->hitboxHeight;
+						}
+
+					// else if the player was on a ladder top, and the player is on this ladder top...
+					// then the player is still on this ladder top
+					} else if(state == PlayerState::onTransientGround) {
+						if(isAbove(player, wRect) && xOverlap(player, wRect)) {
+							isOnTransientGround = true;
+						}
+					}
 					break;
 				}
 			}
 		}
 
 		// process post tile collision
-		if(state == PlayerState::onTransientGround && !isOnTransientGround) {
+		if((state == PlayerState::onLadder && !isOnLadder) ||
+		   (state == PlayerState::onTransientGround && !isOnTransientGround)) {
 			state = PlayerState::inAir;
 		}
 
@@ -678,16 +746,18 @@ int main(int argc, char *argv[]) {
 					map.tiles[y][x].hitboxHeight
 				};
 				Uint8 value = map.tiles[y][x].type;
-				SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-				if(value == 1) {
-					SDL_SetRenderDrawColor(renderer, 0, 0, 128, 255);
-				} else if(value == 2) {
-					SDL_SetRenderDrawColor(renderer, 128, 0, 0, 255);
-				} else if(value == 3) {
-					SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
+				if(value > 0) {
+					SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
+					if(value == 1) {
+						SDL_SetRenderDrawColor(renderer, 0, 0, 128, 255);
+					} else if(value == 2) {
+						SDL_SetRenderDrawColor(renderer, 128, 0, 0, 255);
+					} else if(value == 3) {
+						SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
+					}
+					worldRectToRenderRect(worldDest, screenDest, screenProps);
+					SDL_RenderFillRect(renderer, &screenDest);
 				}
-				worldRectToRenderRect(worldDest, screenDest, screenProps);
-				SDL_RenderFillRect(renderer, &screenDest);
 			}
 		}
 
@@ -711,7 +781,7 @@ int main(int argc, char *argv[]) {
 		if(drawDebug) {
 			//render new input
 			{
-				sprintf_s(Text, textLen, newInputTextTemplate,
+				sprintf_s(Text, textLen, "NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
 					input.arrowUp.isDown,
 					input.arrowDown.isDown,
 					input.arrowLeft.isDown,
@@ -734,7 +804,7 @@ int main(int argc, char *argv[]) {
 
 				//render delta input
 			{
-				sprintf_s(Text, textLen, oldInputTextTemplate,
+				sprintf_s(Text, textLen, "Delta   : {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
 					input.arrowUp.isDown != input.arrowUp.wasDown,
 					input.arrowDown.isDown != input.arrowDown.wasDown,
 					input.arrowLeft.isDown != input.arrowLeft.wasDown,
@@ -760,7 +830,7 @@ int main(int argc, char *argv[]) {
 			{
 				int mouseX, mouseY;
 				SDL_GetMouseState(&mouseX, &mouseY);
-				sprintf_s(Text, textLen, TextTemplateMousePos,
+				sprintf_s(Text, textLen, "WorldMouse: {%f,%f}  ScreenMouse: {%d,%d}",
 					mouseX / screenProps.pixPerHorizontalMeter,
 					mouseY / screenProps.pixPerVerticalMeter,
 					mouseX, mouseY);

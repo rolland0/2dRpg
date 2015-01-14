@@ -1,3 +1,7 @@
+Day 007_1 -- ladder feature reimplementation
+	reimplemented ladder interactions for tilemap
+		still needs ladder-jump interactions
+
 Day 007 -- tilemap revision
 	revised internal representation of tiles
 	reimplementing logic
