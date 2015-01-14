@@ -1,3 +1,6 @@
+Day 008 -- fixed ladder interactions
+	tile map needs revision; (Tile *playerOccupiedTile)?
+
 Day 007_1 -- ladder feature reimplementation
 	reimplemented ladder interactions for tilemap
 		still needs ladder-jump interactions
