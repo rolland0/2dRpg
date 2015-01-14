@@ -1,3 +1,7 @@
+Day 007 -- tilemap revision
+	revised internal representation of tiles
+	reimplementing logic
+
 Day 005 -- tilemap
 	created a rough tilemap
 	needs revision
