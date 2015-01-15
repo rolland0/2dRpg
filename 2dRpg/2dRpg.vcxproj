@@ -46,6 +46,7 @@
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>W:\lib\sdl_2\include;W:\lib\sdl_ttf_2\include;W:\lib\sdl_img_2\include</AdditionalIncludeDirectories>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>4351</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -69,6 +70,7 @@ copy $(SolutionDir)\res\* $(OutDir) &gt; nul</Command>
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>W:\lib\sdl_2\include;W:\lib\sdl_ttf_2\include;W:\lib\sdl_img_2\include</AdditionalIncludeDirectories>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>4351</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>

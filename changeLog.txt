@@ -1,3 +1,7 @@
+Day 008_1 -- added playerOccupiedTiles[]
+	game now tracks tiles that the player is occupying (ladders attached to, platforms standing on)
+	Day 007's regressions are fixed
+
 Day 008 -- fixed ladder interactions
 	tile map needs revision; (Tile *playerOccupiedTile)?
 
