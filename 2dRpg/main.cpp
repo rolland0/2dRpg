@@ -1,8 +1,11 @@
 #include <SDL.h>
 #include <SDL_ttf.h>
+#include <SDL_image.h>
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <glm/glm.hpp>
+using glm::vec2;
 
 inline void LogError() {
 	SDL_Log(SDL_GetError());
@@ -45,6 +48,10 @@ bool yOverlap(WorldRect &a, WorldRect &b) {
 	return a.y + a.h > b.y && a.y < b.y + b.h;
 }
 
+bool standingOn(WorldRect &a, WorldRect &b) {
+	return a.y == b.y + b.h;
+}
+
 bool isAbove(WorldRect &a, WorldRect &b) {
 	return a.y >= b.y + b.h;
 }
@@ -75,29 +82,35 @@ void worldRectToRenderRect(WorldRect &wRect, SDL_Rect &rRect, ScreenProperties &
 enum TileType {
 	TileNone = 0,
 	TilePlatform = 1,
-	TileLadder = 2
+	TileLadder = 2,
+	TileNumElements
 };
 
 enum TileSolidity {
 	TsNonSolid,
 	TsTransientSolid,
-	TsSolid
+	TsSolid,
+	TsNumElements
 };
 
-//struct TileImpl {
-//	float hitboxWidth;
-//	float hitboxHeight;
-//	TileSolidity solidity;
-//};
+struct TileImpl {
+	float hitboxOffsetX;
+	float hitboxOffsetY;
+	float hitboxWidth;
+	float hitboxHeight;
+	TileSolidity solidity;
+};
+
+TileImpl TileCommon[TileType::TileNumElements];
 
 struct Tile {
 	TileType type = TileType::TileNone;
 	float xPos = 0.0f;
 	float yPos = 0.0f;
-	//TileImpl *common = NULL;
-	float hitboxWidth;
-	float hitboxHeight;
-	TileSolidity solidity;
+	TileImpl *common = NULL;
+	//float hitboxWidth;
+	//float hitboxHeight;
+	//TileSolidity solidity;
 	bool isOccupied = false;
 };
 
@@ -187,6 +200,11 @@ void readTileMapText(TileMap &map, const char* filename, float worldWidth, float
 	map.tileWidth = worldWidth / map.Width;
 	map.tileHeight = worldHeight / map.Height;
 
+	TileCommon[TileType::TileNone] = TileImpl {0.0f, 0.0f, map.tileWidth, map.tileHeight, TileSolidity::TsNonSolid};
+	TileCommon[TileType::TileLadder] = TileImpl {0.0f, 0.0f, map.tileWidth, map.tileHeight, TileSolidity::TsTransientSolid};
+	TileCommon[TileType::TilePlatform] = TileImpl {0.0f, 0.0f, map.tileWidth, map.tileHeight, TileSolidity::TsTransientSolid};
+
+
 	std::ifstream file;
 	std::string line;
 	file.open(filename);
@@ -201,27 +219,21 @@ void readTileMapText(TileMap &map, const char* filename, float worldWidth, float
 					tile->type = TileType::TileNone;
 					tile->xPos = 0.0f;
 					tile->yPos = 0.0f;
-					tile->hitboxWidth = 1;
-					tile->hitboxHeight = 1;
-					tile->solidity = TsNonSolid;
+					tile->common = &TileCommon[TileType::TileNone];
 					break;
 
 				case TileType::TilePlatform:
 					tile->type = TileType::TilePlatform;
 					tile->xPos = x*map.tileWidth;
 					tile->yPos = ((map.Height - 1) - y)*map.tileHeight;
-					tile->hitboxWidth = map.tileWidth;
-					tile->hitboxHeight = map.tileHeight / 2;
-					tile->solidity = TsTransientSolid;
+					tile->common = &TileCommon[TileType::TilePlatform];
 					break;
 
 				case TileType::TileLadder:
 					tile->type = TileType::TileLadder;
 					tile->xPos = x*map.tileWidth;
 					tile->yPos = ((map.Height - 1) - y)*map.tileHeight;
-					tile->hitboxWidth = map.tileWidth / 2;
-					tile->hitboxHeight = map.tileHeight;
-					tile->solidity = TsTransientSolid;
+					tile->common = &TileCommon[TileType::TileLadder];
 					break;
 				}
 			}
@@ -232,7 +244,7 @@ void readTileMapText(TileMap &map, const char* filename, float worldWidth, float
 }
 
 struct OccupiedTiles {
-	static const int MaxNumOccupiedTiles = 10;
+	static const int MaxNumOccupiedTiles = 20;
 	Tile *playerOccupiedTiles[MaxNumOccupiedTiles] = {};
 	int numOccupiedTiles = 0;
 	int iter = 0;
@@ -269,6 +281,28 @@ struct OccupiedTiles {
 	}
 };
 
+void printText(SDL_Texture **texture, SDL_Renderer *renderer, TTF_Font *font, int lineNum, char *fmt, ...)
+{
+	va_list argList;
+	va_start(argList, fmt);
+	vsprintf_s(Text, textLen, fmt, argList);
+	va_end(argList);
+
+	if(*texture != NULL) {
+		SDL_DestroyTexture(*texture);
+		*texture = NULL;
+	}
+	SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
+	SDL_Rect screenDest;
+	screenDest.x = 0;
+	screenDest.y = textSurface->h * lineNum;
+	screenDest.w = textSurface->w;
+	screenDest.h = textSurface->h;
+	*texture = SDL_CreateTextureFromSurface(renderer, textSurface);
+	SDL_FreeSurface(textSurface);
+	SDL_RenderCopy(renderer, *texture, NULL, &screenDest);
+}
+
 int main(int argc, char *argv[]) {
 
 	if(SDL_Init(SDL_INIT_EVERYTHING) != 0) {
@@ -283,12 +317,22 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	float WorldWidth = 10.0f;
-	float WorldHeight = 10.0f;
+	if(IMG_Init(IMG_InitFlags::IMG_INIT_PNG) == 0) {
+		LogError();
+		SDL_Quit();
+		return 1;
+	}
 
 	ScreenProperties screenProps = {};
 	screenProps.screenHeight = 720;
 	screenProps.screenWidth = 1280;
+	float aspectRatio = (float)screenProps.screenWidth / (float)screenProps.screenHeight;
+	float pxPerTile = 16.0f;
+
+	float WorldHeight = 15; 
+	float WorldWidth = WorldHeight * aspectRatio;
+
+
 	screenProps.pixPerVerticalMeter = screenProps.screenHeight / WorldHeight; // pixels per meter
 	screenProps.pixPerHorizontalMeter = screenProps.screenWidth / WorldWidth; // pixels per meter
 
@@ -325,13 +369,16 @@ int main(int argc, char *argv[]) {
 
 	float moveSpeed = 2.68224f; // meters per second
 	float gravity = -9.8f; // meters per second per second
-	float jumpSpeed = 12.0f; // meters per second
+	float jumpSpeed = 6.0f; // meters per second
 
 	WorldRect player = {};
 	player.x = 0.00f; // meters
 	player.y = 5.00f; // meters
 	player.w = 0.40f; // meters
 	player.h = 1.75f; // meters
+
+	//vec2 vel(0.0f, 0.0f);
+
 	float xVel = 0.0f;
 	float yVel = 0.0f;
 
@@ -347,6 +394,41 @@ int main(int argc, char *argv[]) {
 	Input input = {};
 
 	OccupiedTiles occupiedTiles;
+
+	SDL_Surface *tiles = IMG_Load("..\\res\\grotto_escape_pack\\graphics\\tiles.png");
+	if(tiles == 0) {
+		SDL_LogError(SDL_LOG_PRIORITY_ERROR, "Failed to load tiles.");
+	}
+
+	SDL_Texture *tilesTexture = SDL_CreateTextureFromSurface(renderer, tiles);
+
+	SDL_Surface *mapSurface = SDL_CreateRGBSurface(
+		0, (int)(map.Width*16), (int)(map.Height*16),
+		32, 0xFF000000, 0x00FF0000, 0X0000FF00, 0X000000FF);
+
+	int tilesPerRow = 8;
+	int tilesPerColumn = 5;
+
+	SDL_Rect source;
+	source.w = source.h = 16;
+	source.x = source.y = 0;
+
+	SDL_Rect dest;
+	dest.w = (int)screenProps.pixPerHorizontalMeter;
+	dest.h = (int)screenProps.pixPerVerticalMeter;
+	dest.x = (int)dest.y = 0;
+
+	for(int y = 0; y < map.Height; y++) {
+		for(int x = 0; x < map.Width; x++) {
+			source.x = (((int)map.tiles[y][x].type) % tilesPerRow) * 16;
+			source.y = (((int)map.tiles[y][x].type) / tilesPerRow) * 16;
+			dest.x = x * dest.w;
+			dest.y = y * dest.h;
+			SDL_BlitSurface(tiles, &source, mapSurface, &dest);
+		}
+	}
+
+	SDL_Texture *mapTexture = SDL_CreateTextureFromSurface(renderer, mapSurface);
 
 	bool drawDebug = true;
 	bool drawTileGrid = false;
@@ -526,7 +608,7 @@ int main(int argc, char *argv[]) {
 		bool isOnLadder = false;
 		while(occupiedTiles.hasNext()) {
 			Tile *tile = occupiedTiles.next();
-			WorldRect wRect = {tile->xPos, tile->yPos, tile->hitboxWidth, tile->hitboxHeight};
+			WorldRect wRect = {tile->xPos, tile->yPos, tile->common->hitboxWidth, tile->common->hitboxHeight};
 
 			switch(tile->type) {
 			case TileType::TileNone:
@@ -536,7 +618,7 @@ int main(int argc, char *argv[]) {
 				// if the player was on a platform, and the player is on this platform...
 				// then the player is still on a platform
 				if(state == PlayerState::PsOnTransientGround) {
-					if(xOverlap(player, wRect)) {
+					if(xOverlap(player, wRect) && standingOn(player, wRect)) {
 						isOnTransientGround = true;
 					} else {
 						occupiedTiles.removeCurrent();
@@ -567,8 +649,11 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		// process post tile collision
-		if((state == PlayerState::PsOnLadder && !isOnLadder) ||
+		// process post tile collision 
+		if(state == PlayerState::PsOnLadder && !isOnLadder) {
+			state = PlayerState::PsOnTransientGround;
+			yVel = 0;
+		} else if((state == PlayerState::PsOnLadder && !isOnLadder) ||
 			(state == PlayerState::PsOnTransientGround && !isOnTransientGround)) {
 			state = PlayerState::PsInAir;
 		}
@@ -579,9 +664,9 @@ int main(int argc, char *argv[]) {
 		// check current tile collisions
 		int numCollidedTiles = 0;
 		int minTileX = (int)(player.x / map.tileWidth) - 1;
-		int maxTileX = (int)((player.x + player.w) / map.tileWidth) + 1;
+		int maxTileX = (int)((player.x + player.w) / map.tileWidth) + 2;
 		int minTileY = (int)(player.y / map.tileHeight) - 1;
-		int maxTileY = (int)((player.y + player.h) / map.tileHeight) + 1;
+		int maxTileY = (int)((player.y + player.h) / map.tileHeight) + 2;
 
 		maxTileX = min(maxTileX, map.Width);
 		maxTileY = min(maxTileY, map.Height);
@@ -591,7 +676,7 @@ int main(int argc, char *argv[]) {
 		for(int tileY = minTileY; tileY < maxTileY; tileY++) {
 			for(int tileX = minTileX; tileX < maxTileX; tileX++) {
 				Tile *tile = &map.tiles[tileY][tileX];
-				WorldRect wRect = {tile->xPos, tile->yPos, tile->hitboxWidth, tile->hitboxHeight};
+				WorldRect wRect = {tile->xPos, tile->yPos, tile->common->hitboxWidth, tile->common->hitboxHeight};
 
 				switch(tile->type) {
 				case TileType::TileNone:
@@ -607,7 +692,7 @@ int main(int argc, char *argv[]) {
 							// land on platform
 							state = PlayerState::PsOnTransientGround;
 							yVel = 0;
-							player.y = tile->yPos + tile->hitboxHeight;
+							player.y = tile->yPos + tile->common->hitboxHeight;
 							occupiedTiles.add(tile);
 						}
 
@@ -618,7 +703,7 @@ int main(int argc, char *argv[]) {
 							// land on platform
 							state = PlayerState::PsOnTransientGround;
 							yVel = 0;
-							player.y = tile->yPos + tile->hitboxHeight;
+							player.y = tile->yPos + tile->common->hitboxHeight;
 							occupiedTiles.add(tile);
 						}
 					}
@@ -644,7 +729,7 @@ int main(int argc, char *argv[]) {
 								isOnLadder = true;
 								xVel = 0;
 								yVel = 0;
-								player.x = tile->xPos + (tile->hitboxWidth - player.w) / 2;
+								player.x = tile->xPos + (tile->common->hitboxWidth - player.w) / 2;
 								occupiedTiles.add(tile);
 							}
 						}
@@ -665,7 +750,7 @@ int main(int argc, char *argv[]) {
 								// land on platform
 								state = PlayerState::PsOnTransientGround;
 								yVel = 0;
-								player.y = tile->yPos + tile->hitboxHeight; 
+								player.y = tile->yPos + tile->common->hitboxHeight; 
 								occupiedTiles.add(tile);
 							}
 						}
@@ -679,9 +764,7 @@ int main(int argc, char *argv[]) {
 		if(isOnLadder) {
 			state = PlayerState::PsOnLadder;
 		}
-
 		dropDown = false;
-
 
 		WorldRect collideRect = {(float)minTileX, (float)minTileY, (float)maxTileX - minTileX, (float)maxTileY - minTileY};
 
@@ -701,30 +784,31 @@ int main(int argc, char *argv[]) {
 		SDL_RenderFillRect(renderer, &screenDest);
 
 		//tile map
+		SDL_RenderCopy(renderer, mapTexture, NULL, NULL);
 		WorldRect worldDest = {};
-		for(int y = 0; y < TileMap::Height; y++) {
-			for(int x = 0; x < TileMap::Width; x++) {
-				worldDest = {
-					map.tiles[y][x].xPos,
-					map.tiles[y][x].yPos,
-					map.tiles[y][x].hitboxWidth,
-					map.tiles[y][x].hitboxHeight
-				};
-				Uint8 value = map.tiles[y][x].type;
-				if(value > 0) {
-					SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
-					if(value == 1) {
-						SDL_SetRenderDrawColor(renderer, 0, 0, 128, 255);
-					} else if(value == 2) {
-						SDL_SetRenderDrawColor(renderer, 128, 0, 0, 255);
-					} else if(value == 3) {
-						SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
-					}
-					worldRectToRenderRect(worldDest, screenDest, screenProps);
-					SDL_RenderFillRect(renderer, &screenDest);
-				}
-			}
-		}
+		//for(int y = 0; y < TileMap::Height; y++) {
+		//	for(int x = 0; x < TileMap::Width; x++) {
+		//		worldDest = {
+		//			map.tiles[y][x].xPos,
+		//			map.tiles[y][x].yPos,
+		//			map.tiles[y][x].common->hitboxWidth,
+		//			map.tiles[y][x].common->hitboxHeight
+		//		};
+		//		Uint8 value = map.tiles[y][x].type;
+		//		if(value > 0) {
+		//			SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
+		//			if(value == 1) {
+		//				SDL_SetRenderDrawColor(renderer, 0, 0, 128, 255);
+		//			} else if(value == 2) {
+		//				SDL_SetRenderDrawColor(renderer, 128, 0, 0, 255);
+		//			} else if(value == 3) {
+		//				SDL_SetRenderDrawColor(renderer, 128, 0, 128, 255);
+		//			}
+		//			worldRectToRenderRect(worldDest, screenDest, screenProps);
+		//			SDL_RenderFillRect(renderer, &screenDest);
+		//		}
+		//	}
+		//}
 
 		//draw player
 		worldRectToRenderRect(player, screenDest, screenProps);
@@ -744,77 +828,59 @@ int main(int argc, char *argv[]) {
 		}
 
 		if(drawDebug) {
+
 			//render new input
-			{
-				sprintf_s(Text, textLen, "NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
-					input.arrowUp.isDown,
-					input.arrowDown.isDown,
-					input.arrowLeft.isDown,
-					input.arrowRight.isDown,
-					input.jump.isDown);
+			printText(&thisInputTexture, renderer, font, 0, 
+				"NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
+				input.arrowUp.isDown,
+				input.arrowDown.isDown,
+				input.arrowLeft.isDown,
+				input.arrowRight.isDown,
+				input.jump.isDown);
 
-				if(thisInputTexture != NULL) {
-					SDL_DestroyTexture(thisInputTexture);
-					thisInputTexture = NULL;
-				}
-				SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
-				screenDest.x = 0;
-				screenDest.y = textSurface->h * 0;
-				screenDest.w = textSurface->w;
-				screenDest.h = textSurface->h;
-				thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-				SDL_FreeSurface(textSurface);
-				SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
-			}
 
-				//render delta input
-			{
-				sprintf_s(Text, textLen, "Delta   : {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
-					input.arrowUp.isDown != input.arrowUp.wasDown,
-					input.arrowDown.isDown != input.arrowDown.wasDown,
-					input.arrowLeft.isDown != input.arrowLeft.wasDown,
-					input.arrowRight.isDown != input.arrowRight.wasDown,
-					input.jump.isDown != input.jump.wasDown);
-
-				if(thisInputTexture != NULL) {
-					SDL_DestroyTexture(thisInputTexture);
-					thisInputTexture = NULL;
-				}
-
-				SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
-				screenDest.x = 0;
-				screenDest.y = textSurface->h * 1;
-				screenDest.w = textSurface->w;
-				screenDest.h = textSurface->h;
-				thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-				SDL_FreeSurface(textSurface);
-				SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
-			}
+			//render delta input
+			printText(&thisInputTexture, renderer, font, 1,
+				"Delta   : {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
+				input.arrowUp.isDown != input.arrowUp.wasDown,
+				input.arrowDown.isDown != input.arrowDown.wasDown,
+				input.arrowLeft.isDown != input.arrowLeft.wasDown,
+				input.arrowRight.isDown != input.arrowRight.wasDown,
+				input.jump.isDown != input.jump.wasDown);
 
 			//render mouse position text
-			{
-				int mouseX, mouseY;
-				SDL_GetMouseState(&mouseX, &mouseY);
-				sprintf_s(Text, textLen, "WorldMouse: {%f,%f}  ScreenMouse: {%d,%d}",
-					mouseX / screenProps.pixPerHorizontalMeter,
-					mouseY / screenProps.pixPerVerticalMeter,
-					mouseX, mouseY);
+			int mouseX, mouseY;
+			SDL_GetMouseState(&mouseX, &mouseY);
+			printText(&thisInputTexture, renderer, font, 2,
+				"WorldMouse: {%f,%f}  ScreenMouse: {%d,%d}",
+				mouseX / screenProps.pixPerHorizontalMeter,
+				mouseY / screenProps.pixPerVerticalMeter,
+				mouseX, mouseY);
 
-				if(thisInputTexture != NULL) {
-					SDL_DestroyTexture(thisInputTexture);
-					thisInputTexture = NULL;
-				}
+			//render player pos
+			printText(&thisInputTexture, renderer, font, 3,
+				"PlayerPos: {%f, %f} PlayerVel: {%f, %f}", 
+				player.x, player.y, xVel, yVel);
 
-				SDL_Surface *textSurface = TTF_RenderText_Blended(font, Text, SDL_Color {128, 128, 128, 0});
-				screenDest.x = 0;
-				screenDest.y = textSurface->h * 2;
-				screenDest.w = textSurface->w;
-				screenDest.h = textSurface->h;
-				thisInputTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-				SDL_FreeSurface(textSurface);
-				SDL_RenderCopy(renderer, thisInputTexture, NULL, &screenDest);
+			//render player state
+			char *target = "PlayerState: Unknown State";
+			switch(state) {
+			case PlayerState::PsInAir:
+				target = "PlayerState: inAir";
+				break;
+			case PlayerState::PsOnLadder:
+				target = "PlayerState: onLadder";
+				break;
+			case PlayerState::PsOnTransientGround:
+				target = "PlayerState: onTransientGround";
+				break;
+			case PlayerState::PsPsOnSolidGround:
+				target = "PlayerState: onSolidGround";
+				break;
 			}
-		}
+			printText(&thisInputTexture, renderer, font, 4, target);
+
+		} // if(drawDebug)
 
 		// display screen
 		SDL_RenderPresent(renderer);
@@ -828,6 +894,7 @@ int main(int argc, char *argv[]) {
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
 	TTF_Quit();
+	IMG_Quit();
 	SDL_Quit();
 	return 0;
 }

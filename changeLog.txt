@@ -1,3 +1,13 @@
+2/11/15
+	Created test tile map
+	Prepared for tilemap loading refactor
+	
+2/8/15
+	Pulled out text rendering into a separate function
+	
+2/7/15
+	Fixed player can't jump out off of platform consistently
+
 Day 008_1 -- added playerOccupiedTiles[]
 	game now tracks tiles that the player is occupying (ladders attached to, platforms standing on)
 	Day 007's regressions are fixed

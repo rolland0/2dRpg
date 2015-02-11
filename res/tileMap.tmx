@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.0" orientation="orthogonal" renderorder="right-down" width="30" height="15" tilewidth="16" tileheight="16" nextobjectid="1">
+ <tileset firstgid="1" name="tiles" tilewidth="16" tileheight="16">
+  <image source="grotto_escape_pack/graphics/tiles.png" width="128" height="80"/>
+ </tileset>
+ <layer name="Background" width="30" height="15">
+  <data encoding="base64" compression="zlib">
+   eJx9lc0OAiEMhHvRROCy4lU9bfb931BMmOTbsXiYUJbKdPqDPSLaQJmQ3Sdk14k21wLIT+e87zlwDLwnZN9w182gONynGkczfsX8/b6Dk2iJv2tt4KpxzoHWluzL5D0A8Vb49/jNIbm9HtXOi63fHL+MV/B7yVsTrmZn//Ijre846z1MY9ZLnmN+Y255T8a7qq/4XEuzO70urlP5WOVYeqmnGD/nJ8s5e4vcPc59nM0R9XI2esLR7Yx2TXi9ttTM3mdPtAXf6v2gbtbW50d78rhm7yfOFuOiv+LcI+9j8jJv/G02M+Rmr7HPauTvFPkfA/e5btP2/WNRe68N+/7fDOnd8PlhrcRztzikbUM8/C94RV7XFe9qZrJ5kc9l4ArskfcT7Q+UjiC9
+  </data>
+ </layer>
+ <layer name="Foreground" width="30" height="15">
+  <data encoding="base64" compression="zlib">
+   eJztkL0KgDAMhKMVdFIXrX+DfxTf/wm9YgJBdBHs1IOP9Dr0Lk2IyICUMcqbB59RVFRUVDg5JqQqUPNsA+Q5zrIg5+zj50zZ0Wd2oAAzn3swgkHN4eanj3mC9yVd+1r2C1jBpqbG3+23PtJpfOkkb3ecJ3/cKE56LwYa
+  </data>
+ </layer>
+</map>
