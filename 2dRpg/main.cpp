@@ -7,112 +7,17 @@
 #include <glm/glm.hpp>
 using glm::vec2;
 
+#include "mathUtil.h"
+#include "input.h"
+#include "worldRect.h"
+#include "display.h"
+#include "tiles.h"
+
 inline void LogError() {
 	SDL_Log(SDL_GetError());
 }
 
 void breakHere() {}
-
-int min(int a, int b) {
-	return (a < b) ? a : b;
-}
-
-int max(int a, int b) {
-	return (a > b) ? a : b;
-}
-
-float clamp(float val, float min, float max) {
-	if(val < min) return min;
-	if(val > max) return max;
-	return val;
-}
-
-int clamp(int val, int min, int max) {
-	if(val < min) return min;
-	if(val > max) return max;
-	return val;
-}
-
-struct WorldRect {
-	float x;
-	float y;
-	float w;
-	float h;
-};
-
-bool xOverlap(WorldRect &a, WorldRect &b) {
-	return a.x + a.w > b.x && a.x < b.x + b.w;
-}
-
-bool yOverlap(WorldRect &a, WorldRect &b) {
-	return a.y + a.h > b.y && a.y < b.y + b.h;
-}
-
-bool standingOn(WorldRect &a, WorldRect &b) {
-	return a.y == b.y + b.h;
-}
-
-bool isAbove(WorldRect &a, WorldRect &b) {
-	return a.y >= b.y + b.h;
-}
-
-bool isBelowBottom(WorldRect &a, WorldRect &b) {
-	return a.y < b.y;
-}
-
-bool isBelowTop(WorldRect &a, WorldRect &b) {
-	return a.y < b.y + b.h;
-}
-
-struct ScreenProperties {
-	int screenWidth;
-	int screenHeight;
-	float pixPerHorizontalMeter;
-	float pixPerVerticalMeter;
-};
-
-// creates an SDL_Rect from WorldRect, based on screen properties
-void worldRectToRenderRect(WorldRect &wRect, SDL_Rect &rRect, ScreenProperties &screenProps) {
-	rRect.w = (int)(wRect.w * screenProps.pixPerHorizontalMeter);
-	rRect.h = (int)(wRect.h * screenProps.pixPerVerticalMeter);
-	rRect.x = (int)(wRect.x * screenProps.pixPerHorizontalMeter);
-	rRect.y = screenProps.screenHeight - ((int)(wRect.y * screenProps.pixPerVerticalMeter) + rRect.h);
-}
-
-enum TileType {
-	TileNone = 0,
-	TilePlatform = 1,
-	TileLadder = 2,
-	TileNumElements
-};
-
-enum TileSolidity {
-	TsNonSolid,
-	TsTransientSolid,
-	TsSolid,
-	TsNumElements
-};
-
-struct TileImpl {
-	float hitboxOffsetX;
-	float hitboxOffsetY;
-	float hitboxWidth;
-	float hitboxHeight;
-	TileSolidity solidity;
-};
-
-TileImpl TileCommon[TileType::TileNumElements];
-
-struct Tile {
-	TileType type = TileType::TileNone;
-	float xPos = 0.0f;
-	float yPos = 0.0f;
-	TileImpl *common = NULL;
-	//float hitboxWidth;
-	//float hitboxHeight;
-	//TileSolidity solidity;
-	bool isOccupied = false;
-};
 
 enum PlayerState {
 	PsInAir,
@@ -121,63 +26,6 @@ enum PlayerState {
 	PsOnLadder
 };
 
-struct Button {
-	bool isDown;
-	bool wasDown;
-};
-
-struct Stick {
-	float startX;
-	float minX;
-	float maxX;
-	float endX;
-
-	float startY;
-	float minY;
-	float maxY;
-	float endY;
-};
-
-const int NumButtons = 6;
-
-struct Input {
-	bool isAnalog;
-	Stick stick;
-	union {
-		Button buttons[NumButtons];
-		struct {
-			Button arrowUp;
-			Button arrowDown;
-			Button arrowLeft;
-			Button arrowRight;
-			Button jump;
-			Button attack;
-		};
-	};
-};
-
-// set all lastValue to currentValue (everything that was new is now old)
-void changeFrame(Input &input) {
-	input.stick.startX = input.stick.minX = input.stick.maxX = input.stick.endX;
-	input.stick.startY = input.stick.minY = input.stick.maxY = input.stick.endY;
-	for(int i = 0; i < NumButtons; i++) {
-		input.buttons[i].wasDown = input.buttons[i].isDown;
-	}
-}
-
-// fills in analog stick values based on movement key values
-// input.stick.end{X/Y} get persisted by function "void changeFrame(Input &input)"
-void buildAnalogInput(Input &input) {
-	if(!input.isAnalog) {
-		input.stick.endX = 0;
-		input.stick.endX += input.arrowRight.isDown;
-		input.stick.endX -= input.arrowLeft.isDown;
-		input.stick.endY = 0;
-		input.stick.endY += input.arrowUp.isDown;
-		input.stick.endY -= input.arrowDown.isDown;
-	}
-}
-
 const int textLen = 100;
 char Text[textLen];
 
@@ -185,101 +33,6 @@ SDL_Surface *renderTextBlended(TTF_Font *font, const char *text, Uint8 r, Uint8 
 	SDL_Color color = {r, g, b, a};
 	return TTF_RenderText_Blended(font, text, color);
 }
-
-struct TileMap {
-	static const int Width = 10;
-	static const int Height = 10;
-	float tileWidth = 0.0f;
-	float tileHeight = 0.0f;
-
-	Tile tiles[Height][Width];
-};
-
-
-void readTileMapText(TileMap &map, const char* filename, float worldWidth, float worldHeight) {
-	map.tileWidth = worldWidth / map.Width;
-	map.tileHeight = worldHeight / map.Height;
-
-	TileCommon[TileType::TileNone] = TileImpl {0.0f, 0.0f, map.tileWidth, map.tileHeight, TileSolidity::TsNonSolid};
-	TileCommon[TileType::TileLadder] = TileImpl {0.0f, 0.0f, map.tileWidth, map.tileHeight, TileSolidity::TsTransientSolid};
-	TileCommon[TileType::TilePlatform] = TileImpl {0.0f, 0.0f, map.tileWidth, map.tileHeight, TileSolidity::TsTransientSolid};
-
-
-	std::ifstream file;
-	std::string line;
-	file.open(filename);
-	if(file.is_open()) {
-		int y = 0;
-		while(getline(file, line)) {
-			for(unsigned int x = 0; x < line.length() && y < TileMap::Height; x++) {
-				TileType type = (TileType)(line.at(x) - '0');
-				Tile *tile = &(map.tiles[((map.Height - 1) - y)][x]);
-				switch(type) {
-				case TileType::TileNone:
-					tile->type = TileType::TileNone;
-					tile->xPos = 0.0f;
-					tile->yPos = 0.0f;
-					tile->common = &TileCommon[TileType::TileNone];
-					break;
-
-				case TileType::TilePlatform:
-					tile->type = TileType::TilePlatform;
-					tile->xPos = x*map.tileWidth;
-					tile->yPos = ((map.Height - 1) - y)*map.tileHeight;
-					tile->common = &TileCommon[TileType::TilePlatform];
-					break;
-
-				case TileType::TileLadder:
-					tile->type = TileType::TileLadder;
-					tile->xPos = x*map.tileWidth;
-					tile->yPos = ((map.Height - 1) - y)*map.tileHeight;
-					tile->common = &TileCommon[TileType::TileLadder];
-					break;
-				}
-			}
-			y++;
-		}
-		file.close();
-	}
-}
-
-struct OccupiedTiles {
-	static const int MaxNumOccupiedTiles = 20;
-	Tile *playerOccupiedTiles[MaxNumOccupiedTiles] = {};
-	int numOccupiedTiles = 0;
-	int iter = 0;
-
-	bool hasNext() {
-		if(iter < numOccupiedTiles) {
-			return true;
-		} else {
-			iter = 0;
-			return false;
-		}
-	}
-
-	Tile *next() {
-		return playerOccupiedTiles[iter++];
-	}
-
-	void removeCurrent() {
-		iter--;
-		iter = clamp(iter, 0, numOccupiedTiles-1);
-		playerOccupiedTiles[iter] = playerOccupiedTiles[numOccupiedTiles - 1];
-		playerOccupiedTiles[numOccupiedTiles - 1] = NULL;
-		numOccupiedTiles--;
-	}
-
-	void add(Tile* tile) {
-		bool alreadyExists = false;
-		for(int i = 0; i < numOccupiedTiles && !alreadyExists; i++) {
-			alreadyExists = (tile == playerOccupiedTiles[i]);
-		}
-		if(!alreadyExists) {
-			playerOccupiedTiles[numOccupiedTiles++] = tile;
-		}
-	}
-};
 
 void printText(SDL_Texture **texture, SDL_Renderer *renderer, TTF_Font *font, int lineNum, char *fmt, ...)
 {
