@@ -19,13 +19,6 @@ inline void LogError() {
 
 void breakHere() {}
 
-enum PlayerState {
-	PsInAir,
-	PsOnTransientGround,
-	PsPsOnSolidGround,
-	PsOnLadder
-};
-
 const int textLen = 100;
 char Text[textLen];
 
@@ -92,7 +85,7 @@ int main(int argc, char *argv[]) {
 	SDL_Window *window = SDL_CreateWindow("2D RPG",
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 		screenProps.screenWidth, screenProps.screenHeight,
-		SDL_WindowFlags::SDL_WINDOW_RESIZABLE);
+		SDL_WindowFlags::SDL_WINDOW_RESIZABLE | SDL_WindowFlags::SDL_WINDOW_OPENGL );
 	if(window == NULL) {
 		LogError();
 		SDL_Quit();
@@ -106,6 +99,8 @@ int main(int argc, char *argv[]) {
 		SDL_Quit();
 		return 1;
 	}
+
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
 	TTF_Font *font = TTF_OpenFont("..\\res\\font.ttf", 16);
 	if(font == NULL) {
@@ -134,9 +129,6 @@ int main(int argc, char *argv[]) {
 
 	float xVel = 0.0f;
 	float yVel = 0.0f;
-
-	PlayerState state = PlayerState::PsInAir;
-	bool dropDown = false;
 
 	TileMap map = {};
 	readTileMapText(map, "..\\res\\TileMap.txt", WorldWidth, WorldHeight);
@@ -289,50 +281,11 @@ int main(int argc, char *argv[]) {
 		// emulate joystick values from arrow/WASD keys
 		buildAnalogInput(input);
 
-		// process input based on player state
-		switch(state) {
-		case PlayerState::PsInAir:
-			xVel = input.stick.endX * moveSpeed;
-			yVel += gravity * dt;
-			break;
-
-		case PlayerState::PsOnLadder:
-			if(input.jump.isDown && !input.jump.wasDown) {
-				state = PlayerState::PsInAir;
-				dropDown = true;
-				xVel = input.stick.endX * moveSpeed;
-				yVel += jumpSpeed / 3;
-			} else {
-				xVel = 0;
-				yVel = input.stick.endY * moveSpeed;
-			}
-			break;
-
-		case PlayerState::PsOnTransientGround:
-			xVel = input.stick.endX * moveSpeed;
-			if(input.stick.endY < 0 && input.stick.startY != input.stick.endY) {
-				dropDown = true;
-				state = PlayerState::PsInAir;
-				yVel -= moveSpeed;
-			} else if(input.jump.isDown && !input.jump.wasDown) {
-				// jump
-				state = PlayerState::PsInAir;
-				yVel += jumpSpeed;
-			}
-			break;
-
-		case PlayerState::PsPsOnSolidGround:
-			xVel = input.stick.endX * moveSpeed;
-			if(input.jump.isDown && !input.jump.wasDown) {
-				// jump
-				state = PlayerState::PsInAir;
-				yVel += jumpSpeed;
-			}
-			break;
-		}
-
 		// move player
 		WorldRect playerPosCopy = player;
+
+		xVel = (float)(input.arrowRight.isDown - input.arrowLeft.isDown) * moveSpeed;
+		yVel = (float)(input.arrowUp.isDown - input.arrowDown.isDown) * moveSpeed;
 
 		// move x
 		player.x += xVel * dt;
@@ -346,181 +299,42 @@ int main(int argc, char *argv[]) {
 
 		// move y
 		player.y += yVel * dt;
-		if(player.y <= 0) {
+		if(player.y < 0)
+		{
 			player.y = 0;
 			yVel = 0;
-			state = PlayerState::PsPsOnSolidGround;
-		} else if(player.y + player.h > WorldHeight) {
+		} else if(player.y + player.h > WorldHeight)
+		{
 			player.y = WorldHeight - player.h;
 			yVel = 0;
-			state = PlayerState::PsInAir;
 		}
 
-		// check previously collided tiles
-		bool isOnTransientGround = false;
-		bool isOnLadder = false;
-		while(occupiedTiles.hasNext()) {
-			Tile *tile = occupiedTiles.next();
-			WorldRect wRect = {tile->xPos, tile->yPos, tile->common->hitboxWidth, tile->common->hitboxHeight};
-
-			switch(tile->type) {
-			case TileType::TileNone:
-				break;
-
-			case TileType::TilePlatform:
-				// if the player was on a platform, and the player is on this platform...
-				// then the player is still on a platform
-				if(state == PlayerState::PsOnTransientGround) {
-					if(xOverlap(player, wRect) && standingOn(player, wRect)) {
-						isOnTransientGround = true;
-					} else {
-						occupiedTiles.removeCurrent();
-						break;
-					}
-				} 
-				break;
-
-			case TileType::TileLadder:
-				if(state == PlayerState::PsOnLadder) {
-					if(!dropDown &&  xOverlap(player, wRect) && yOverlap(player, wRect)) {
-						isOnLadder = true;
-					} else {
-						occupiedTiles.removeCurrent();
-						break;
-					}
-				// else if the player was on a ladder top, and the player is on this ladder top...
-				// then the player is still on this ladder top
-				} else if(state == PlayerState::PsOnTransientGround) {
-					if(xOverlap(player, wRect)) {
-						isOnTransientGround = true;
-					} else {
-						occupiedTiles.removeCurrent();
-						break;
-					}
-				}
-				break;
-			}
-		}
-
-		// process post tile collision 
-		if(state == PlayerState::PsOnLadder && !isOnLadder) {
-			state = PlayerState::PsOnTransientGround;
-			yVel = 0;
-		} else if((state == PlayerState::PsOnLadder && !isOnLadder) ||
-			(state == PlayerState::PsOnTransientGround && !isOnTransientGround)) {
-			state = PlayerState::PsInAir;
-		}
-
-		isOnLadder = false;
-		isOnTransientGround = false;
 
 		// check current tile collisions
 		int numCollidedTiles = 0;
-		int minTileX = (int)(player.x / map.tileWidth) - 1;
-		int maxTileX = (int)((player.x + player.w) / map.tileWidth) + 2;
-		int minTileY = (int)(player.y / map.tileHeight) - 1;
-		int maxTileY = (int)((player.y + player.h) / map.tileHeight) + 2;
+		int minTileX = (int)(player.x / map.tileWidth);// -1;
+		int maxTileX = (int)((player.x + player.w) / map.tileWidth) + 1;
+		int minTileY = (int)(player.y / map.tileHeight);// -1;
+		int maxTileY = (int)((player.y + player.h) / map.tileHeight) + 1;
 
 		maxTileX = min(maxTileX, map.Width);
 		maxTileY = min(maxTileY, map.Height);
 		minTileX = max(minTileX, 0);
 		minTileY = max(minTileY, 0);
 
-		for(int tileY = minTileY; tileY < maxTileY; tileY++) {
-			for(int tileX = minTileX; tileX < maxTileX; tileX++) {
+		for(int tileY = minTileY; tileY < maxTileY; tileY++)
+		{
+			for(int tileX = minTileX; tileX < maxTileX; tileX++)
+			{
 				Tile *tile = &map.tiles[tileY][tileX];
 				WorldRect wRect = {tile->xPos, tile->yPos, tile->common->hitboxWidth, tile->common->hitboxHeight};
-
-				switch(tile->type) {
-				case TileType::TileNone:
-					break;
-
-				case TileType::TilePlatform:
-					// if the player was in the air, and was above platform, and is now under top layer...
-					// then player is on the platform
-					if(state == PlayerState::PsInAir) {
-						if(!dropDown &&
-							isAbove(playerPosCopy, wRect) && xOverlap(playerPosCopy, wRect) &&
-							isBelowTop(player, wRect) && xOverlap(player, wRect)) {
-							// land on platform
-							state = PlayerState::PsOnTransientGround;
-							yVel = 0;
-							player.y = tile->yPos + tile->common->hitboxHeight;
-							occupiedTiles.add(tile);
-						}
-
-						// if the player was going down a ladder and is now on this platform...
-						// then the player is now on this platform
-					} else if(state == PlayerState::PsOnLadder) {
-						if(yVel < 0 && xOverlap(player, wRect) && isBelowTop(player, wRect)) {
-							// land on platform
-							state = PlayerState::PsOnTransientGround;
-							yVel = 0;
-							player.y = tile->yPos + tile->common->hitboxHeight;
-							occupiedTiles.add(tile);
-						}
-					}
-					break;
-
-				case TileType::TileLadder:
-					// if the player is on a ladder, and is vertically on this ladder...
-					// then the player is still on this ladder
-					if(state == PlayerState::PsOnLadder) {
-						if(!dropDown && xOverlap(player, wRect) &&
-							!yOverlap(playerPosCopy, wRect) && yOverlap(player, wRect)) {
-
-							occupiedTiles.add(tile);
-						}
-					} else {
-
-						// if the player was not on a ladder, and the player presses up or down,
-						// and the player is overlapping this ladder...
-						// then the player is now on this ladder
-						if(/*!dropDown &&*/ input.stick.startY != input.stick.endY &&
-							(input.stick.endY > 0 || input.stick.endY < 0)) {
-							if(xOverlap(player, wRect) && yOverlap(player, wRect)) {
-								isOnLadder = true;
-								xVel = 0;
-								yVel = 0;
-								player.x = tile->xPos + (tile->common->hitboxWidth - player.w) / 2;
-								occupiedTiles.add(tile);
-							}
-						}
-
-						// if the player was in the air, and was above platform, and is now under top layer,
-						// and this ladder is not below another ladder...
-						// then player is on the ladder top
-						if(state == PlayerState::PsInAir) {
-							bool ladderHasNoLadderAboveIt = true;
-							if(tileY < (maxTileY - 1)) {
-								if(map.tiles[tileY + 1][tileX].type == TileType::TileLadder) {
-									ladderHasNoLadderAboveIt = false;
-								}
-							}
-							if(!dropDown && ladderHasNoLadderAboveIt &&
-								isAbove(playerPosCopy, wRect) && xOverlap(playerPosCopy, wRect) &&
-								isBelowTop(player, wRect) && xOverlap(player, wRect)) {
-								// land on platform
-								state = PlayerState::PsOnTransientGround;
-								yVel = 0;
-								player.y = tile->yPos + tile->common->hitboxHeight; 
-								occupiedTiles.add(tile);
-							}
-						}
-
-					}
-					break;
-				}
 			}
 		}
-
-		if(isOnLadder) {
-			state = PlayerState::PsOnLadder;
-		}
-		dropDown = false;
-
-		WorldRect collideRect = {(float)minTileX, (float)minTileY, (float)maxTileX - minTileX, (float)maxTileY - minTileY};
-
+			WorldRect collideRect = {(float)minTileX, (float)minTileY, (float)maxTileX - minTileX, (float)maxTileY - minTileY};
+			collideRect.x *= map.tileWidth;
+			collideRect.y *= map.tileHeight;
+			collideRect.w *= map.tileWidth;
+			collideRect.h *= map.tileHeight;
 
 // Rendering
 
@@ -530,11 +344,6 @@ int main(int argc, char *argv[]) {
 
 		// draw rect
 		SDL_Rect screenDest;
-
-		// draw collide rect
-		worldRectToRenderRect(collideRect, screenDest, screenProps);
-		SDL_SetRenderDrawColor(renderer, 128, 64, 0, 255);
-		SDL_RenderFillRect(renderer, &screenDest);
 
 		//tile map
 		SDL_RenderCopy(renderer, mapTexture, NULL, NULL);
@@ -582,6 +391,11 @@ int main(int argc, char *argv[]) {
 
 		if(drawDebug) {
 
+		// draw collide rect
+		worldRectToRenderRect(collideRect, screenDest, screenProps);
+		SDL_SetRenderDrawColor(renderer, 128, 64, 0, 64);
+		SDL_RenderFillRect(renderer, &screenDest);
+
 			//render new input
 			printText(&thisInputTexture, renderer, font, 0, 
 				"NewInput: {Up: %d} {Down: %d} {Left: %d} {Right: %d} {Jump: %d}",
@@ -617,20 +431,7 @@ int main(int argc, char *argv[]) {
 
 			//render player state
 			char *target = "PlayerState: Unknown State";
-			switch(state) {
-			case PlayerState::PsInAir:
-				target = "PlayerState: inAir";
-				break;
-			case PlayerState::PsOnLadder:
-				target = "PlayerState: onLadder";
-				break;
-			case PlayerState::PsOnTransientGround:
-				target = "PlayerState: onTransientGround";
-				break;
-			case PlayerState::PsPsOnSolidGround:
-				target = "PlayerState: onSolidGround";
-				break;
-			}
+			
 			printText(&thisInputTexture, renderer, font, 4, target);
 
 		} // if(drawDebug)
